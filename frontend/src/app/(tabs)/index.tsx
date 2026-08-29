@@ -1,98 +1,98 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { router } from 'expo-router';
+import { useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Logo } from '@/components/logo';
+import { ProductCard } from '@/components/product-card';
+import { SearchBar } from '@/components/search-bar';
+import { Button } from '@/components/ui/button';
+import { Chip } from '@/components/ui/chip';
+import { IconButton } from '@/components/ui/icon-button';
+import { SectionHeader } from '@/components/ui/section-header';
+import { Colors, Layout, Spacing, Type } from '@/constants/theme';
+import { CATEGORIES, CART_COUNT, FEATURED_PRODUCTS, saleBadges, vehicleSpecs } from '@/lib/mock-data';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const insets = useSafeAreaInsets();
+  const [activeCategory, setActiveCategory] = useState('all');
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  return (
+    <View style={styles.screen}>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + Spacing.lg }]}
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <View style={styles.brand}>
+            <Logo />
+            <Text style={styles.tagline}>Vehículos con carácter</Text>
+          </View>
+          <IconButton
+            icon="shopping-bag"
+            accessibilityLabel="Carrito"
+            badge={CART_COUNT}
+            onPress={() => router.push('/cart')}
+          />
+        </View>
+
+        <SearchBar onFilterPress={() => {}} />
+
+        <View style={styles.section}>
+          <SectionHeader title="Categorías" />
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chips}>
+            {CATEGORIES.map((category) => (
+              <Chip
+                key={category.id}
+                label={category.label}
+                selected={activeCategory === category.id}
+                onPress={() => setActiveCategory(category.id)}
+              />
+            ))}
+          </ScrollView>
+        </View>
+
+        <View style={styles.section}>
+          <SectionHeader
+            title="Destacados"
+            count={`${FEATURED_PRODUCTS.length} VEHÍCULOS`}
+            action={<Button label="Ver todos" variant="ghost" size="sm" onPress={() => router.push('/explore')} />}
+          />
+          <View style={styles.products}>
+            {FEATURED_PRODUCTS.map((product) => (
+              <ProductCard
+                key={product.id}
+                title={product.title}
+                price={product.price}
+                badges={saleBadges(product.saleType)}
+                specs={vehicleSpecs(product)}
+                onPress={() => {}}
+              />
+            ))}
+          </View>
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  screen: { flex: 1, backgroundColor: Colors.bg },
+  content: {
+    paddingHorizontal: Layout.screenX,
+    paddingBottom: 104,
+  },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    gap: Spacing.md,
+    marginBottom: Spacing.xl,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
+  brand: { gap: Spacing.xs },
+  tagline: { ...Type.caption, color: Colors.textMuted },
+  section: { marginTop: Spacing.xxl, gap: Spacing.lg },
+  chips: { gap: Spacing.sm, paddingRight: Layout.screenX },
+  products: { gap: Layout.gap },
 });

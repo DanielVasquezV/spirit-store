@@ -1,0 +1,132 @@
+erDiagram
+
+    %% ----------------------------------------------------
+    %% ENTIDADES Y ATRIBUTOS
+    %% ----------------------------------------------------
+
+    USERS {
+        uuid id PK
+        string email UK
+        string password_hash
+        string full_name
+        string phone_number
+        string dui_photo_url "Foto del DUI. Dato del usuario: aplica a todos sus vehículos"
+        timestamp created_at
+    }
+
+    VEHICLES {
+        uuid id PK
+        uuid seller_id FK
+        string vin UK "Número VIN del vehículo"
+        string license_plate "Número de placa"
+        string brand
+        string model
+        int year
+        int mileage
+        string transmission
+        decimal base_price
+        string sale_type "DIRECT_SALE | AUCTION | BOTH"
+        string status "AVAILABLE | IN_AUCTION | RESERVED | SOLD"
+        vector description_embedding "Para Búsqueda Semántica IA"
+        timestamp created_at
+    }
+
+    %% Para enlistar (venta o subasta) se exige: VIN, placa y
+    %% el DUI del vendedor (dato de USERS, no del vehículo).
+
+    VEHICLE_IMAGES {
+        uuid id PK
+        uuid vehicle_id FK
+        string url
+        int position
+    }
+
+    ORDERS {
+        uuid id PK
+        uuid vehicle_id FK
+        uuid buyer_id FK
+        decimal total_amount
+        string payment_status "PENDING | COMPLETED | FAILED"
+        string payment_gateway_id "Stripe/PayPal ID"
+        timestamp created_at
+    }
+
+    AUCTIONS {
+        uuid id PK
+        uuid vehicle_id FK
+        decimal starting_price
+        decimal current_bid
+        uuid current_winner_id FK
+        timestamp start_time
+        timestamp end_time
+        string status "PENDING | ACTIVE | FINISHED | CANCELLED"
+    }
+
+    BIDS {
+        uuid id PK
+        uuid auction_id FK
+        uuid bidder_id FK
+        decimal amount
+        timestamp created_at
+    }
+
+    CHATS {
+        uuid id PK
+        uuid vehicle_id FK
+        uuid buyer_id FK
+        uuid seller_id FK
+        string chat_type "PURCHASE | SALE | AUCTION_WIN"
+        timestamp created_at
+    }
+
+    MESSAGES {
+        uuid id PK
+        uuid chat_id FK
+        uuid sender_id FK
+        text content
+        string message_type "TEXT | IMAGE | OFFER"
+        boolean is_read
+        timestamp created_at
+    }
+
+    AI_DIAGNOSTICS {
+        uuid id PK
+        uuid user_id FK
+        string vehicle_brand
+        string vehicle_model
+        int vehicle_year
+        string title "Descripción corta de la falla"
+        timestamp created_at
+    }
+
+    AI_DIAGNOSTIC_MESSAGES {
+        uuid id PK
+        uuid diagnostic_id FK
+        string sender "USER | AI_ASSISTANT"
+        text content
+        timestamp created_at
+    }
+
+    %% ----------------------------------------------------
+    %% RELACIONES
+    %% ----------------------------------------------------
+
+    %% Sin roles: todo usuario puede comprar y vender.
+    USERS ||--o{ VEHICLES : "enlista para venta o subasta"
+    VEHICLES ||--|{ VEHICLE_IMAGES : "tiene"
+    VEHICLES ||--o| ORDERS : "se vende mediante"
+    USERS ||--o{ ORDERS : "compra"
+
+    VEHICLES ||--o| AUCTIONS : "se subasta mediante"
+    AUCTIONS ||--o{ BIDS : "recibe"
+    USERS ||--o{ BIDS : "realiza"
+    USERS ||--o{ AUCTIONS : "gana (current_winner)"
+
+    VEHICLES ||--o{ CHATS : "referencia a"
+    USERS ||--o{ CHATS : "participa como comprador"
+    USERS ||--o{ CHATS : "participa como vendedor"
+    CHATS ||--|{ MESSAGES : "contiene"
+    USERS ||--o{ MESSAGES : "envía"
+
+    USERS ||--o{ AI_DIAGNOSTICS : "inicia"
+    AI_DIAGNOSTICS ||--|{ AI_DIAGNOSTIC_MESSAGES : "contiene hilo"

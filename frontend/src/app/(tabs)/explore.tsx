@@ -11,7 +11,7 @@ export default function ExploreScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <ScreenHeader title="Explorar" right={<View />} />
+      <ScreenHeader title="Explorar" />
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 104 + insets.bottom }]}
         showsVerticalScrollIndicator={false}>

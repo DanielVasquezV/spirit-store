@@ -11,7 +11,7 @@ export default function CartScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <ScreenHeader title="Carrito" right={<View />} />
+      <ScreenHeader title="Carrito" />
       <View style={[styles.empty, { paddingBottom: 96 + insets.bottom }]}>
         <View style={styles.iconWrap}>
           <Feather name="shopping-bag" size={44} color={Colors.textMuted} />

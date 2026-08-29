@@ -13,47 +13,67 @@ type ScreenHeaderProps = {
 export function ScreenHeader({ title, subtitle, onBack, right }: ScreenHeaderProps) {
   return (
     <View style={styles.row}>
-      {/* Slots laterales de ancho fijo: el título queda centrado aunque falte back o right */}
-      {onBack ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Volver"
-          hitSlop={8}
-          onPress={onBack}
-          style={({ pressed }) => [styles.slot, pressed && styles.pressed]}>
-          <Feather name="arrow-left" size={24} color={Colors.text} />
-        </Pressable>
-      ) : (
-        <View style={styles.slot} />
-      )}
-
-      <View style={styles.center}>
-        <Text style={styles.title}>{title}</Text>
-        {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+      <View style={styles.side}>
+        {onBack ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Volver"
+            hitSlop={8}
+            onPress={onBack}
+            style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
+            <Feather name="arrow-left" size={24} color={Colors.text} />
+          </Pressable>
+        ) : null}
       </View>
 
-      {right ?? <View style={styles.slot} />}
+      {/* Centrado respecto al ancho completo del header, no al espacio entre laterales */}
+      <View pointerEvents="none" style={styles.center}>
+        <Text numberOfLines={1} style={styles.title}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text numberOfLines={1} style={styles.subtitle}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.side}>{right}</View>
     </View>
   );
 }
+
+const SIDE_WIDTH = Layout.touchMin;
 
 const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: Layout.screenX,
     minHeight: Layout.headerHeight,
-    gap: Spacing.sm,
   },
-  slot: {
-    width: 44,
-    height: 44,
+  side: {
+    width: SIDE_WIDTH,
+    minHeight: SIDE_WIDTH,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+  },
+  action: {
+    width: SIDE_WIDTH,
+    height: SIDE_WIDTH,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: Radius.sm,
   },
   pressed: { opacity: Motion.pressOpacity },
-  center: { flex: 1, alignItems: 'center' },
-  title: { ...Type.h1, color: Colors.text },
-  subtitle: { ...Type.caption, color: Colors.textMuted },
+  center: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: SIDE_WIDTH + Spacing.sm,
+  },
+  title: { ...Type.h1, color: Colors.text, textAlign: 'center' },
+  subtitle: { ...Type.caption, color: Colors.textMuted, textAlign: 'center' },
 });

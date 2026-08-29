@@ -14,7 +14,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
-      <ScreenHeader title="Perfil" right={<View />} />
+      <ScreenHeader title="Perfil" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 104 + insets.bottom }]}>
         <View style={styles.identity}>
           <View style={styles.avatar}>

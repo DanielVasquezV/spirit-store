@@ -1,0 +1,45 @@
+{
+  "name": "spirit-store",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "db:up": "docker compose up -d db adminer",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f db adminer",
+    "db:migrate": "npm run prisma:migrate -w @spirit-store/backend",
+    "db:deploy": "npm run prisma:deploy -w @spirit-store/backend",
+    "db:generate": "npm run prisma:generate -w @spirit-store/backend",
+    "db:push": "npm run prisma:push -w @spirit-store/backend",
+    "db:studio": "npm run prisma:studio -w @spirit-store/backend",
+    "db:seed": "npm run prisma:seed -w @spirit-store/backend",
+    "app:start": "npm run start -w @spirit-store/frontend",
+    "app:android": "npm run android -w @spirit-store/frontend",
+    "app:ios": "npm run ios -w @spirit-store/frontend",
+    "app:web": "npm run web -w @spirit-store/frontend",
+    "api:dev": "npm run dev -w @spirit-store/backend",
+    "api:build": "npm run build -w @spirit-store/backend",
+    "api:start": "npm run start -w @spirit-store/backend",
+    "dev": "concurrently -n api,app -c blue,green \"npm run dev:api\" \"npm run app:web\"",
+    "dev:api": "npm run dev -w @spirit-store/backend",
+    "dev:app": "npm run start -w @spirit-store/frontend",
+    "prod:up": "docker compose -f docker-compose.prod.yml up -d --build",
+    "prod:down": "docker compose -f docker-compose.prod.yml down",
+    "typecheck": "npm run typecheck -w @spirit-store/backend && npm run typecheck -w @spirit-store/frontend",
+    "build": "npm run build -w @spirit-store/backend && npm run export:web -w @spirit-store/frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5"
+  },
+  "allowScripts": {
+    "prisma@7.10.0": true,
+    "@prisma/engines@7.10.0": true,
+    "esbuild@0.28.2": true,
+    "unrs-resolver@1.12.2": true
+  }
+}

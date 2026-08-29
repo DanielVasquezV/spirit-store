@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Prisma generated client
+backend/src/generated/
+
+# Builds / outputs
+dist/
+build/
+expo-web/
+web-build/
+
+# Expo
+.expo/
+expo-env.d.ts
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Native
+/android/
+/ios/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Docker (volumes are discarded by default)
+# PGDATA content lives in a named volume; ephemeral copies are listed below
+db-data/
+db-data-tmp/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/*
+!.vscode/extensions.json

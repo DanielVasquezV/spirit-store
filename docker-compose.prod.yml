@@ -1,0 +1,48 @@
+name: spirit-store-prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-spirit_store}
+      POSTGRES_USER: ${POSTGRES_USER:-spirit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spirit_password}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-spirit} -d ${POSTGRES_DB:-spirit_store}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-spirit}:${POSTGRES_PASSWORD:-spirit_password}@db:5432/${POSTGRES_DB:-spirit_store}?schema=public
+      CLIENT_URL: ${CLIENT_URL:-*}
+    ports:
+      - "${API_PORT:-4000}:4000"
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-http://localhost:4000}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8081}:80"
+
+volumes:
+  db_data:

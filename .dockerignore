@@ -1,0 +1,14 @@
+# Contexto de build del monorepo: mantenerlo ligero
+node_modules
+**/node_modules
+**/dist
+**/.expo
+.git
+.gitignore
+.env
+.env.*
+*.log
+**/web-build
+.android
+.ios
+frontend/.git

@@ -8,8 +8,9 @@ export default function TabLayout() {
       tabBar={(props) => <FloatingTabBar {...props} />}
       screenOptions={{ headerShown: false, sceneStyle: { backgroundColor: Colors.bg } }}>
       <Tabs.Screen name="index" options={{ title: 'Inicio' }} />
-      <Tabs.Screen name="explore" options={{ title: 'Explorar' }} />
-      <Tabs.Screen name="cart" options={{ title: 'Carrito' }} />
+      <Tabs.Screen name="search" options={{ title: 'Buscar' }} />
+      <Tabs.Screen name="auctions" options={{ title: 'Subastas' }} />
+      <Tabs.Screen name="chats" options={{ title: 'Inbox' }} />
       <Tabs.Screen name="profile" options={{ title: 'Perfil' }} />
     </Tabs>
   );

@@ -1,17 +1,19 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { Colors, Spacing, Type } from '@/constants/theme';
+import { formatPriceParts } from '@/lib/format';
 
-type PriceProps = { amount: number; currency?: string; caption?: string };
+type PriceProps = { amount: number; currency?: string; caption?: string; variant?: 'default' | 'hero' };
 
-export function Price({ amount, currency = '$', caption }: PriceProps) {
-  // Entero y decimales en partes separadas para estilizarlos de forma independiente.
-  const [whole, cents = '00'] = amount.toFixed(2).split('.');
+export function Price({ amount, currency = '$', caption, variant = 'default' }: PriceProps) {
+  const { whole, cents } = formatPriceParts(amount);
+  const wholeStyle = variant === 'hero' ? styles.wholeHero : styles.whole;
+  const centsStyle = variant === 'hero' ? styles.centsHero : styles.cents;
 
   return (
     <View style={styles.wrap}>
       <View style={styles.row}>
-        <Text style={styles.whole}>{whole}</Text>
-        <Text style={styles.cents}>
+        <Text style={wholeStyle}>{whole}</Text>
+        <Text style={centsStyle}>
           .{cents} {currency}
         </Text>
       </View>
@@ -25,5 +27,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-end' },
   whole: { ...Type.price, color: Colors.text },
   cents: { ...Type.priceCents, color: Colors.text, marginBottom: 2 },
+  wholeHero: { ...Type.priceHero, color: Colors.text },
+  centsHero: { ...Type.priceCentsHero, color: Colors.text, marginBottom: 2 },
   caption: { ...Type.labelSm, color: Colors.textMuted },
 });

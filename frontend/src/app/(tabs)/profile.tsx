@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { router } from 'expo-router';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, Pressable, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -42,6 +42,25 @@ export default function ProfileScreen() {
             <Badge label="Pendiente" />
           </View>
           <Button label="Subir documento" variant="secondary" fullWidth onPress={() => {}} />
+        </View>
+
+        <Text style={styles.sectionLabel}>Herramientas</Text>
+        <View style={styles.card}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/diagnostics')}
+            style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}>
+            <View style={styles.toolRow}>
+              <View style={[styles.docIcon, { backgroundColor: Colors.warning }]}>
+                <Feather name="cpu" size={20} color={Colors.textInverse} />
+              </View>
+              <View style={styles.toolInfo}>
+                <Text style={styles.toolTitle}>Diagnóstico IA</Text>
+                <Text style={styles.toolSub}>Consultá fallas mecánicas antes de comprar o reparar</Text>
+              </View>
+            </View>
+            <Feather name="chevron-right" size={20} color={Colors.textMuted} />
+          </Pressable>
         </View>
 
         <Text style={styles.sectionLabel}>Actividad</Text>
@@ -107,4 +126,9 @@ const styles = StyleSheet.create({
   },
   menuRowBorder: { borderBottomWidth: Hairline, borderBottomColor: Colors.border },
   menuLabel: { ...Type.body, color: Colors.text },
+  pressed: { opacity: 0.7 },
+  toolRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, flex: 1 },
+  toolInfo: { flex: 1, gap: Spacing.xs },
+  toolTitle: { ...Type.bodyStrong, color: Colors.text },
+  toolSub: { ...Type.caption, color: Colors.textMuted },
 });

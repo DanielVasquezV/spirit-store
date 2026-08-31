@@ -57,7 +57,7 @@ export default function HomeScreen() {
           <SectionHeader
             title="Destacados"
             count={`${FEATURED_PRODUCTS.length} VEHÍCULOS`}
-            action={<Button label="Ver todos" variant="ghost" size="sm" onPress={() => router.push('/explore')} />}
+            action={<Button label="Ver todos" variant="ghost" size="sm" onPress={() => router.push('/search')} />}
           />
           <View style={styles.products}>
             {FEATURED_PRODUCTS.map((product) => (

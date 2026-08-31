@@ -33,6 +33,13 @@ export const Colors = {
   warning: '#D29922',
   danger: '#F85149',
   info: '#58A6FF',
+
+  bubbleSelf: '#424242',
+  bubbleIncomingBorder: '#333333',
+} as const;
+
+export const Gradient = {
+  rainbow: ['#22D3EE', '#A78BFA', '#F472B6', '#FBBF24'],
 } as const;
 
 export const Spacing = {
@@ -78,6 +85,8 @@ export const Type = {
   labelSm: { fontFamily: FontFamily.semibold, fontSize: 10, lineHeight: 12, letterSpacing: 0.6, textTransform: 'uppercase' },
   price: { fontFamily: FontFamily.bold, fontSize: 26, lineHeight: 28, letterSpacing: -0.6 },
   priceCents: { fontFamily: FontFamily.bold, fontSize: 15, lineHeight: 18, letterSpacing: -0.2 },
+  priceHero: { fontFamily: FontFamily.bold, fontSize: 28, lineHeight: 32, letterSpacing: -0.6 },
+  priceCentsHero: { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 20, letterSpacing: -0.2 },
 } satisfies Record<string, TextStyle>;
 
 export const Layout = {

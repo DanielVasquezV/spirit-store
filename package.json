@@ -41,5 +41,8 @@
     "@prisma/engines@7.10.0": true,
     "esbuild@0.28.2": true,
     "unrs-resolver@1.12.2": true
+  },
+  "dependencies": {
+    "expo": "^57.0.25"
   }
 }

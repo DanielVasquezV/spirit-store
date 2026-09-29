@@ -2,6 +2,7 @@
   errorResponse,
   errorSchemas,
   noContentResponse,
+  paginatedEnvelope,
   securitySchemes,
   successEnvelope,
 } from './components.js';
@@ -387,6 +388,318 @@ export const paths = {
         200: successEnvelope('#/components/schemas/PublicUser', 'Usuario encontrado.'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         404: errorResponse('NOT_FOUND', 'User not found'),
+      },
+    },
+  },
+  '/api/vehicles': {
+    get: {
+      tags: ['Vehículos'],
+      summary: 'Listar el catálogo',
+      description: [
+        'Catálogo público: se puede consultar sin sesión. Solo se listan vehículos',
+        '`AVAILABLE` o `IN_AUCTION`; los `DRAFT` (publicaciones sin terminar) y los',
+        'dados de baja no aparecen.',
+        '',
+        'Se pagina y se filtra en la base, no en el cliente. `q` busca en marca y',
+        'modelo, ignorando mayúsculas y acentos: "PORSCHE" encuentra "Porsche" y',
+        '"skoda" encuentra "Škoda".',
+      ].join('\n'),
+      security: [],
+      parameters: [
+        { name: 'q', in: 'query', required: false, schema: { type: 'string' }, description: 'Texto libre sobre marca y modelo.', example: 'porsche' },
+        { name: 'category', in: 'query', required: false, schema: { $ref: '#/components/schemas/Category' } },
+        { name: 'fuel', in: 'query', required: false, schema: { $ref: '#/components/schemas/Fuel' } },
+        { name: 'transmission', in: 'query', required: false, schema: { $ref: '#/components/schemas/Transmission' } },
+        { name: 'saleType', in: 'query', required: false, schema: { $ref: '#/components/schemas/SaleType' } },
+        { name: 'status', in: 'query', required: false, schema: { $ref: '#/components/schemas/VehicleStatus' } },
+        { name: 'minPrice', in: 'query', required: false, schema: { type: 'number' } },
+        { name: 'maxPrice', in: 'query', required: false, schema: { type: 'number' } },
+        { name: 'sellerId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/Vehicle', 'Página del catálogo.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed', {
+          category: 'category debe ser uno de: SUV, SEDAN, SPORT, ELECTRIC, PICKUP, COMPACT',
+        }),
+      },
+    },
+    post: {
+      tags: ['Vehículos'],
+      summary: 'Publicar un vehículo',
+      description: [
+        'Alta de una publicación. El `sellerId` sale del token, nunca del cuerpo.',
+        '',
+        '**Requiere el DUI cargado en el perfil**: es la regla de la plataforma para',
+        'enlistar (ver `db-er.mermaid`). Si falta, responde 400.',
+        '',
+        'Si `saleType` es `AUCTION` hay que mandar el bloque `auction` con',
+        '`startingPrice` y `endTime`; la subasta se crea en la misma operación y el',
+        'vehículo queda `IN_AUCTION`. Las fotos se suben antes con',
+        '`/uploads/sign` y acá solo se referencian por URL de Cloudinary.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: { $ref: '#/components/schemas/CreateVehicleRequest' },
+            examples: {
+              subasta: {
+                summary: 'Vehículo que entra a subasta',
+                value: {
+                  vin: '1HGBH41JXMN109186', licensePlate: 'P-345ABC', brand: 'Porsche', model: '911',
+                  year: 2021, mileage: 12000, transmission: 'AUTOMATIC', fuel: 'GASOLINE', category: 'SPORT',
+                  engine: '3.0L Boxer Turbo', power: '385 HP', drivetrain: 'RWD', basePrice: 128500,
+                  saleType: 'AUCTION', auction: { startingPrice: 120000, endTime: '2026-10-10T18:00:00.000Z' },
+                },
+              },
+            },
+          },
+        },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/Vehicle', 'Vehículo publicado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed', {
+          duiPhotoUrl: 'El DUI es obligatorio para publicar',
+        }),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        409: errorResponse('CONFLICT', 'A record with the same unique value already exists', { fields: ['vin'] }),
+      },
+    },
+  },
+
+  '/api/vehicles/mine': {
+    get: {
+      tags: ['Vehículos'],
+      summary: 'Mis publicaciones',
+      description:
+        'Vehículos del usuario autenticado, **incluidos los `DRAFT`**. Acepta los mismos filtros que el catálogo, salvo que el `sellerId` es forzosamente el propio.',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', required: false, schema: { $ref: '#/components/schemas/VehicleStatus' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/Vehicle', 'Página con las publicaciones propias.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+  },
+
+  '/api/vehicles/{id}': {
+    get: {
+      tags: ['Vehículos'],
+      summary: 'Ver un vehículo',
+      description:
+        'Público. Si el vehículo está en `DRAFT`, solo lo ven su dueño y un ADMIN; para el resto responde 404, para no confirmar que el id existe.',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        200: successEnvelope('#/components/schemas/Vehicle', 'Vehículo encontrado.'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+      },
+    },
+    patch: {
+      tags: ['Vehículos'],
+      summary: 'Editar un vehículo',
+      description: [
+        'Solo el vendedor que lo publicó o un ADMIN. PATCH parcial: lo que no se',
+        'manda queda intacto.',
+        '',
+        '`status` solo alterna entre `DRAFT` y `AVAILABLE`. `IN_AUCTION` y `SOLD`',
+        'los maneja la API (subasta y cierre de venta), así que mandarlos es un',
+        '400; y si el vehículo tiene una subasta `PENDING` o `ACTIVE` el cambio',
+        'es un 409 porque la subasta manda sobre su estado.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateVehicleRequest' } } },
+      },
+      responses: {
+        200: successEnvelope('#/components/schemas/Vehicle', 'Vehículo actualizado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+        409: errorResponse('CONFLICT', 'El vehiculo tiene una subasta en curso: cancelala antes de cambiar el estado'),
+      },
+    },
+    delete: {
+      tags: ['Vehículos'],
+      summary: 'Dar de baja un vehículo',
+      description: [
+        'Borrado **lógico**: la fila queda con `deletedAt`, porque chats, órdenes y',
+        'pujas la referencian y su historial tiene que seguir resolviendo. La',
+        'subasta asociada, si estaba `PENDING` o `ACTIVE`, se cancela en la misma',
+        'transacción.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        204: noContentResponse('Vehículo dado de baja.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+      },
+    },
+  },
+
+  '/api/vehicles/{id}/images': {
+    post: {
+      tags: ['Vehículos'],
+      summary: 'Agregar una foto a la galería',
+      description: [
+        'La foto se sube antes directa a Cloudinary con `/api/uploads/sign` y acá se',
+        'asocia al vehículo. Guardar el `publicId` es lo que permite borrarla del',
+        'proveedor después. Si no se manda `position`, la foto va al final de la',
+        'galería.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['url'],
+              properties: {
+                url: { type: 'string', format: 'uri', description: 'Debe ser una URL de Cloudinary.' },
+                publicId: { type: 'string' },
+                position: { type: 'integer', description: '0 es la portada.' },
+              },
+            },
+          },
+        },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/Vehicle', 'Vehículo con la nueva foto.'),
+        400: errorResponse('VALIDATION_ERROR', 'La imagen debe venir de Cloudinary'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+      },
+    },
+  },
+
+  '/api/vehicles/{id}/images/{imageId}': {
+    delete: {
+      tags: ['Vehículos'],
+      summary: 'Quitar una foto de la galería',
+      description: [
+        'Solo el dueño del vehículo o un ADMIN. Si la foto se había guardado con',
+        '`publicId`, también se intenta borrar el asset de Cloudinary; si esa',
+        'llamada falla la foto igual sale de la galería, porque dejar la foto pegada',
+        'sería peor que dejar un asset huérfano.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'imageId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+      ],
+      responses: {
+        204: noContentResponse('Foto quitada de la galería.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
+        404: errorResponse('NOT_FOUND', 'Vehicle image not found'),
+      },
+    },
+  },
+
+  '/api/auctions': {
+    get: {
+      tags: ['Subastas'],
+      summary: 'Listar subastas',
+      description: 'Público. Se ordenan por `endTime` ascendente: las que cierran antes primero. No incluye subastas de vehículos dados de baja.',
+      security: [],
+      parameters: [
+        { name: 'status', in: 'query', required: false, schema: { $ref: '#/components/schemas/AuctionStatus' } },
+        { name: 'sellerId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+        { name: 'vehicleId', in: 'query', required: false, schema: { type: 'string', format: 'uuid' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/Auction', 'Página de subastas.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+      },
+    },
+    post: {
+      tags: ['Subastas'],
+      summary: 'Programar una subasta',
+      description: [
+        'Para un vehículo propio que todavía **no** tenga subasta (habitualmente uno',
+        '`BOTH` que se decide subastar después). También sirve para un vehículo',
+        'creado sin bloque `auction`.',
+        '',
+        'Un vehículo `DIRECT_SALE` se rechaza: no admite subasta. Si ya tiene una',
+        'subasta, responde 409. El vehículo pasa a `IN_AUCTION`.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateAuctionRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/Auction', 'Subasta programada.'),
+        400: errorResponse('VALIDATION_ERROR', 'El vehiculo esta marcado como venta directa y no admite subasta'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor puede subastar su vehiculo'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+        409: errorResponse('CONFLICT', 'El vehiculo ya tiene una subasta asociada'),
+      },
+    },
+  },
+
+  '/api/auctions/{id}': {
+    get: {
+      tags: ['Subastas'],
+      summary: 'Ver una subasta',
+      description: 'Público. Incluye el vehículo, el vendedor, el ganador actual y las últimas 10 pujas (solo lectura).',
+      security: [],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        200: successEnvelope('#/components/schemas/Auction', 'Subasta encontrada.'),
+        404: errorResponse('NOT_FOUND', 'Auction not found'),
+      },
+    },
+    patch: {
+      tags: ['Subastas'],
+      summary: 'Editar una subasta programada',
+      description: 'Solo mientras esté `PENDING`. Una vez que la subasta arrancó, mover precio o fechas reescribiría la historia de las pujas, así que responde 409.',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/UpdateAuctionRequest' } } },
+      },
+      responses: {
+        200: successEnvelope('#/components/schemas/Auction', 'Subasta actualizada.'),
+        400: errorResponse('VALIDATION_ERROR', 'startTime debe ser anterior a endTime'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor de la subasta puede modificarla'),
+        404: errorResponse('NOT_FOUND', 'Auction not found'),
+        409: errorResponse('CONFLICT', 'Solo se puede editar una subasta que todavia no empezo'),
+      },
+    },
+    delete: {
+      tags: ['Subastas'],
+      summary: 'Cancelar una subasta',
+      description:
+        'Marca la subasta `CANCELLED` y devuelve el vehículo al catálogo (`AVAILABLE`). Una subasta `FINISHED` no se puede cancelar.',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        204: noContentResponse('Subasta cancelada.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Solo el vendedor de la subasta puede modificarla'),
+        404: errorResponse('NOT_FOUND', 'Auction not found'),
+        409: errorResponse('CONFLICT', 'Una subasta finalizada no se puede cancelar'),
       },
     },
   },

@@ -566,6 +566,453 @@ section('Documentacion OpenAPI (/docs, /docs.json)');
   check('/docs renderiza Swagger UI', /swagger-ui/i.test(body));
 }
 
+// ---------------------------------------------------------------------------
+// Vehiculos y subastas.
+//
+// El usuario `regToken` se usa como vendedor. La regla de que hace falta DUI
+// para publicar se prueba con un usuario recien registrado: si el `regUser` de
+// arriba ya tuviera DUI, el caso "sin DUI -> 400" no probaria nada.
+section('POST /api/vehicles (sin DUI -> 400)');
+let sellerToken = '';
+let sellerId = '';
+{
+  const email = uniqueEmail('vend');
+  created.push(email);
+  const reg = await req('POST', '/auth/register', {
+    body: { email, password: 'Prueba1234!', fullName: 'Smoke Vendedor', phone: '+54 9 11 9999-0000' },
+  });
+  check('registro del vendedor -> 201', reg.status === 201, `fue ${reg.status}`);
+  sellerToken = reg.json?.data?.accessToken ?? '';
+  sellerId = reg.json?.data?.user?.id ?? '';
+
+  const body = {
+    vin: `VIN${Date.now()}`.slice(0, 17),
+    licensePlate: 'SMK-1234',
+    brand: 'Toyota', model: 'Hilux', year: 2020, mileage: 40000,
+    transmission: 'MANUAL', fuel: 'DIESEL', category: 'PICKUP',
+    engine: '2.8L Turbo Diesel', power: '201 HP', drivetrain: '4WD',
+    basePrice: 42000, saleType: 'DIRECT_SALE',
+  };
+  const noDui = await req('POST', '/vehicles', { token: sellerToken, body });
+  check('sin DUI -> 400', noDui.status === 400, `fue ${noDui.status}`);
+  check('  ...el motivo es el DUI', JSON.stringify(noDui.json?.error?.details ?? {}).includes('DUI'),
+    `details ${JSON.stringify(noDui.json?.error?.details)}`);
+
+  const anon = await req('POST', '/vehicles', { body });
+  check('sin token -> 401', anon.status === 401, `fue ${anon.status}`);
+
+  const dui = await req('PATCH', '/auth/me', {
+    token: sellerToken,
+    body: { duiPhotoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/dui/smoke.jpg' },
+  });
+  check('cargar DUI -> 200', dui.status === 200, `fue ${dui.status}`);
+  created.push(email);
+}
+
+section('POST /api/vehicles (validacion)');
+{
+  const base = {
+    vin: `VIN${Date.now()}`.slice(0, 17),
+    licensePlate: 'SMK-9999',
+    brand: 'Toyota', model: 'Corolla', year: 2020, mileage: 30000,
+    transmission: 'MANUAL', fuel: 'GASOLINE', category: 'COMPACT',
+    engine: '1.8L', power: '140 HP', drivetrain: 'FWD',
+    basePrice: 30000, saleType: 'DIRECT_SALE',
+  };
+  const noAuth = await req('POST', '/vehicles', { body: base });
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const badCategory = await req('POST', '/vehicles', { token: sellerToken, body: { ...base, category: 'NAVIDAD' } });
+  check('category invalida -> 400', badCategory.status === 400, `fue ${badCategory.status}`);
+
+  const badFuel = await req('POST', '/vehicles', { token: sellerToken, body: { ...base, fuel: 'PLUTONIO' } });
+  check('fuel invalido -> 400', badFuel.status === 400, `fue ${badFuel.status}`);
+
+  const badYear = await req('POST', '/vehicles', { token: sellerToken, body: { ...base, year: 1800 } });
+  check('year fuera de rango -> 400', badYear.status === 400, `fue ${badYear.status}`);
+
+  const noEngine = await req('POST', '/vehicles', { token: sellerToken, body: { ...base, engine: undefined } });
+  check('engine ausente -> 400', noEngine.status === 400, `fue ${noEngine.status}`);
+
+  const badImage = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: { ...base, images: [{ url: 'https://evil.com/x.jpg' }] },
+  });
+  check('imagen no-Cloudinary -> 400', badImage.status === 400, `fue ${badImage.status}`);
+
+  // AUCTION exige el bloque de subasta: sin el, el vehiculo quedaria en un
+  // limbo sin fechas ni precio de salida.
+  const auctionNoBlock = await req('POST', '/vehicles', { token: sellerToken, body: { ...base, saleType: 'AUCTION' } });
+  check('AUCTION sin bloque auction -> 400', auctionNoBlock.status === 400, `fue ${auctionNoBlock.status}`);
+
+  const pastEnd = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      ...base,
+      saleType: 'AUCTION',
+      auction: { startingPrice: 28000, endTime: new Date(Date.now() - 86400000).toISOString() },
+    },
+  });
+  check('subasta con endTime en el pasado -> 400', pastEnd.status === 400, `fue ${pastEnd.status}`);
+}
+
+section('POST /api/vehicles (alta)');
+let vehicleId = '';
+let auctionId = '';
+{
+  const body = {
+    vin: `VIN${Date.now()}`.slice(0, 17),
+    licensePlate: `SMK-${String(Date.now()).slice(-4)}`,
+    brand: 'Porsche', model: '911', year: 2021, mileage: 12000,
+    transmission: 'AUTOMATIC', fuel: 'GASOLINE', category: 'SPORT',
+    engine: '3.0L Boxer Turbo', power: '385 HP', drivetrain: 'RWD',
+    basePrice: 128500, saleType: 'AUCTION',
+    auction: { startingPrice: 120000, endTime: new Date(Date.now() + 86400000).toISOString() },
+    images: [{
+      url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/smoke-1.jpg',
+      publicId: 'spiritapex/vehicles/smoke-1',
+    }],
+  };
+  const r = await req('POST', '/vehicles', { token: sellerToken, body });
+  check('201', r.status === 201, `fue ${r.status} ${JSON.stringify(r.json)}`);
+  const v = r.json?.data ?? {};
+  vehicleId = v.id ?? '';
+  auctionId = v.auction?.id ?? '';
+  check('devuelve id', typeof vehicleId === 'string' && vehicleId.length > 0);
+  check('  ...armo el title solo', v.title === 'Porsche 911', `quedo "${v.title}"`);
+  check('  ...status IN_AUCTION', v.status === 'IN_AUCTION', `quedo ${v.status}`);
+  check('  ...incluye la subasta', typeof auctionId === 'string' && auctionId.length > 0);
+  check('  ...subasta ACTIVE', v.auction?.status === 'ACTIVE', `quedo ${v.auction?.status}`);
+  check('  ...trae la foto', Array.isArray(v.images) && v.images.length === 1, `llego ${JSON.stringify(v.images)}`);
+  check('  ...guarda el publicId', v.images?.[0]?.publicId === 'spiritapex/vehicles/smoke-1');
+  check('  ...basePrice es numero', typeof v.basePrice === 'number', `llego ${typeof v.basePrice}`);
+  check('  ...el vendedor viene incluido', v.seller?.id === sellerId, `llego ${JSON.stringify(v.seller)}`);
+  check('  ...el vendedor NO expone duiPhotoUrl', !('duiPhotoUrl' in (v.seller ?? {})),
+    `llego ${JSON.stringify(Object.keys(v.seller ?? {}))}`);
+  check('  ...no expone passwordHash', !JSON.stringify(r.json).includes('$2b$'));
+  // El historial de pujas vive en /auctions, no en el DTO del vehiculo: el mismo
+  // DTO se usa en las cards del catalogo y ahi las pujas serian peso inútil.
+  check('  ...el vehiculo no arrastra historial de pujas', !('recentBids' in (v.auction ?? {})),
+    `llego ${JSON.stringify(Object.keys(v.auction ?? {}))}`);
+  check('  ...la subasta resumen trae currentBid en null', v.auction?.currentBid === null,
+    `llego ${JSON.stringify(v.auction?.currentBid)}`);
+
+  // El sellerId va siempre del token, nunca del cuerpo.
+  const spoof = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}X`.slice(0, 17),
+      licensePlate: 'SMK-0001', brand: 'Fiat', model: 'Uno', year: 2015, mileage: 90000,
+      transmission: 'MANUAL', fuel: 'GASOLINE', category: 'COMPACT',
+      engine: '1.0L', power: '70 HP', drivetrain: 'FWD',
+      basePrice: 8000, saleType: 'DIRECT_SALE', sellerId: '00000000-0000-0000-0000-000000000000',
+    },
+  });
+  check('sellerId en el cuerpo se ignora', spoof.json?.data?.seller?.id === sellerId,
+    `quedo ${spoof.json?.data?.seller?.id}`);
+  await req('DELETE', `/vehicles/${spoof.json?.data?.id}`, { token: sellerToken });
+}
+
+section('GET /api/vehicles (catalogo y filtros)');
+{
+  const list = await req('GET', '/vehicles');
+  check('sin token -> 200 (catalogo publico)', list.status === 200, `fue ${list.status}`);
+  check('  ...trae la pagina', Array.isArray(list.json?.data));
+  check('  ...trae la paginacion', typeof list.json?.meta?.page === 'number' && typeof list.json?.meta?.total === 'number',
+    `llego ${JSON.stringify(list.json?.meta)}`);
+  check('  ...el vehiculo de prueba esta', list.json?.data?.some((v) => v.id === vehicleId));
+
+  const found = await req('GET', '/vehicles?q=porsch');
+  check('filtro q insensible a mayusculas', found.json?.data?.some((v) => v.id === vehicleId),
+    `encontrados ${found.json?.meta?.total}`);
+  check('  ...q en mayusculas', (await req('GET', '/vehicles?q=PORSCHE')).json?.data?.some((v) => v.id === vehicleId),
+    `encontrados ${(await req('GET', '/vehicles?q=PORSCHE')).json?.meta?.total}`);
+
+  // La busqueda ignora acentos: se prueba con una marca que los tiene, porque
+  // con "Porsche" el test no probaria nada.
+  const accented = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}A`.slice(0, 17), licensePlate: `AC-${String(Date.now()).slice(-4)}`,
+      brand: 'Citroën', model: 'C4', year: 2021, mileage: 25000, transmission: 'AUTOMATIC',
+      fuel: 'GASOLINE', category: 'COMPACT', engine: '1.2L', power: '130 HP', drivetrain: 'FWD',
+      basePrice: 28000, saleType: 'DIRECT_SALE',
+    },
+  });
+  check('alta con marca acentuada -> 201', accented.status === 201, `fue ${accented.status}`);
+  const accentedId = accented.json?.data?.id ?? '';
+  for (const q of ['citroen', 'CITROEN', 'citroën', 'CITROËN']) {
+    const r = await req('GET', `/vehicles?q=${encodeURIComponent(q)}`);
+    check(`  ...q=${q} encuentra "Citroën"`, r.json?.data?.some((v) => v.id === accentedId),
+      `encontrados ${JSON.stringify(r.json?.data?.map((v) => v.title))}`);
+  }
+
+  const byCategory = await req('GET', '/vehicles?category=SPORT&fuel=GASOLINE&minPrice=100000');
+  check('filtros combinados', byCategory.json?.data?.some((v) => v.id === vehicleId),
+    `encontrados ${byCategory.json?.meta?.total}`);
+  check('  ...minPrice descarta los baratos', !(await req('GET', '/vehicles?minPrice=999999')).json?.data?.length);
+
+  const bad = await req('GET', '/vehicles?category=NAVIDAD');
+  check('category invalida en query -> 400', bad.status === 400, `fue ${bad.status}`);
+
+  const cap = await req('GET', '/vehicles?pageSize=9999');
+  check('pageSize se limita a 100', cap.json?.meta?.pageSize === 100, `quedo ${cap.json?.meta?.pageSize}`);
+
+  const detail = await req('GET', `/vehicles/${vehicleId}`);
+  check('detalle sin token -> 200', detail.status === 200, `fue ${detail.status}`);
+  const noSuch = await req('GET', '/vehicles/00000000-0000-0000-0000-000000000000');
+  check('uuid inexistente -> 404', noSuch.status === 404, `fue ${noSuch.status}`);
+  const badUuid = await req('GET', '/vehicles/no-es-uuid');
+  check('id no-uuid -> 400', badUuid.status === 400, `fue ${badUuid.status}`);
+}
+
+section('GET /api/vehicles/mine');
+{
+  const noAuth = await req('GET', '/vehicles/mine');
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const mine = await req('GET', '/vehicles/mine', { token: sellerToken });
+  check('200', mine.status === 200, `fue ${mine.status}`);
+  check('  ...solo los propios', mine.json?.data?.every((v) => v.seller?.id === sellerId || v.sellerId === sellerId),
+    `llego ${JSON.stringify(mine.json?.data?.map((v) => v.sellerId))}`);
+
+  // Un DRAFT no puede aparecer en el catalogo, pero si en "mis publicaciones".
+  // El borrador se arma publicando primero y guardandolo despues con PATCH: el
+  // alta ignora el status que mande el cliente y lo deduce del saleType.
+  const draftVehicle = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}D`.slice(0, 17), licensePlate: 'SMK-DRAFT', brand: 'Renault', model: 'Sandero',
+      year: 2018, mileage: 70000, transmission: 'MANUAL', fuel: 'GASOLINE', category: 'COMPACT',
+      engine: '1.6L', power: '115 HP', drivetrain: 'FWD', basePrice: 12000, saleType: 'DIRECT_SALE',
+    },
+  });
+  check('crear el vehiculo -> 201', draftVehicle.status === 201, `fue ${draftVehicle.status}`);
+  const draftId = draftVehicle.json?.data?.id ?? '';
+  check('  ...nace AVAILABLE', draftVehicle.json?.data?.status === 'AVAILABLE', `quedo ${draftVehicle.json?.data?.status}`);
+
+  const reserved = await req('PATCH', `/vehicles/${draftId}`, { token: sellerToken, body: { status: 'SOLD' } });
+  check('el vendedor no puede poner SOLD a mano -> 400', reserved.status === 400, `fue ${reserved.status}`);
+  const inAuction = await req('PATCH', `/vehicles/${vehicleId}`, { token: sellerToken, body: { status: 'DRAFT' } });
+  check('no se puede despublicar un vehiculo en subasta -> 409', inAuction.status === 409, `fue ${inAuction.status}`);
+
+  const draft = await req('PATCH', `/vehicles/${draftId}`, { token: sellerToken, body: { status: 'DRAFT' } });
+  check('guardar como borrador -> 200', draft.status === 200, `fue ${draft.status}`);
+  const publicList = await req('GET', '/vehicles?q=sandero');
+  check('el DRAFT no aparece en el catalogo', !(publicList.json?.data ?? []).some((v) => v.id === draftId),
+    `aparecio en ${JSON.stringify(publicList.json?.meta)}`);
+  check('el DRAFT aparece en /mine', (await req('GET', '/vehicles/mine?status=DRAFT', { token: sellerToken })).json?.data?.some((v) => v.id === draftId));
+  const draftDetail = await req('GET', `/vehicles/${draftId}`, { token: regToken });
+  check('otro usuario no ve el DRAFT -> 404', draftDetail.status === 404, `fue ${draftDetail.status}`);
+  check('el dueno si ve su DRAFT', (await req('GET', `/vehicles/${draftId}`, { token: sellerToken })).status === 200);
+  await req('DELETE', `/vehicles/${draftId}`, { token: sellerToken });
+}
+
+section('PATCH /api/vehicles/:id');
+{
+  const noAuth = await req('PATCH', `/vehicles/${vehicleId}`, { body: { brand: 'Anon' } });
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const other = await req('PATCH', `/vehicles/${vehicleId}`, { token: regToken, body: { brand: 'Secuestrado' } });
+  check('otro usuario -> 403', other.status === 403, `fue ${other.status}`);
+
+  const bad = await req('PATCH', `/vehicles/${vehicleId}`, { token: sellerToken, body: { year: 1800 } });
+  check('year invalido -> 400', bad.status === 400, `fue ${bad.status}`);
+
+  const r = await req('PATCH', `/vehicles/${vehicleId}`, { token: sellerToken, body: { basePrice: 135000 } });
+  check('el dueno edita -> 200', r.status === 200, `fue ${r.status}`);
+  check('  ...aplica el cambio', r.json?.data?.basePrice === 135000, `quedo ${r.json?.data?.basePrice}`);
+  check('  ...PATCH es parcial', r.json?.data?.model === '911', `model quedo ${r.json?.data?.model}`);
+}
+
+section('POST/DELETE /api/vehicles/:id/images');
+let imageId = '';
+{
+  const noAuth = await req('POST', `/vehicles/${vehicleId}/images`, { body: { url: 'https://res.cloudinary.com/demo/x.jpg' } });
+  check('agregar sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const other = await req('POST', `/vehicles/${vehicleId}/images`, {
+    token: regToken, body: { url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/x.jpg' },
+  });
+  check('otro usuario -> 403', other.status === 403, `fue ${other.status}`);
+
+  const bad = await req('POST', `/vehicles/${vehicleId}/images`, { token: sellerToken, body: { url: 'https://evil.com/x.jpg' } });
+  check('url no-Cloudinary -> 400', bad.status === 400, `fue ${bad.status}`);
+
+  const r = await req('POST', `/vehicles/${vehicleId}/images`, {
+    token: sellerToken,
+    body: { url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/smoke-2.jpg', publicId: 'spiritapex/vehicles/smoke-2' },
+  });
+  check('agregar foto -> 201', r.status === 201, `fue ${r.status}`);
+  check('  ...quedan dos fotos', r.json?.data?.images?.length === 2, `quedaron ${r.json?.data?.images?.length}`);
+  imageId = r.json?.data?.images?.at(-1)?.id ?? '';
+
+  // Sin Cloudinary configurado el borrado del asset falla, pero la foto tiene
+  // que salir de la galeria igual.
+  const del = await req('DELETE', `/vehicles/${vehicleId}/images/${imageId}`, { token: sellerToken });
+  check('quitar foto -> 204', del.status === 204, `fue ${del.status}`);
+  check('  ...vuelve a quedar una', (await req('GET', `/vehicles/${vehicleId}`)).json?.data?.images?.length === 1);
+  check('quitar foto ajena -> 404',
+    (await req('DELETE', `/vehicles/${vehicleId}/images/${imageId}`, { token: sellerToken })).status === 404);
+}
+
+section('POST /api/auctions');
+let scheduledAuctionId = '';
+{
+  const both = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}B`.slice(0, 17), licensePlate: 'SMK-BOTH', brand: 'Honda', model: 'Civic',
+      year: 2019, mileage: 55000, transmission: 'AUTOMATIC', fuel: 'HYBRID', category: 'COMPACT',
+      engine: '1.5L Turbo', power: '181 HP', drivetrain: 'FWD', basePrice: 22000, saleType: 'BOTH',
+    },
+  });
+  check('crear BOTH sin subasta -> 201', both.status === 201, `fue ${both.status}`);
+  const bothId = both.json?.data?.id ?? '';
+  check('  ...queda AVAILABLE', both.json?.data?.status === 'AVAILABLE', `quedo ${both.json?.data?.status}`);
+
+  const noAuth = await req('POST', '/auctions', { body: { vehicleId: bothId, startingPrice: 20000, endTime: new Date(Date.now() + 86400000).toISOString() } });
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const other = await req('POST', '/auctions', {
+    token: regToken,
+    body: { vehicleId: bothId, startingPrice: 20000, endTime: new Date(Date.now() + 86400000).toISOString() },
+  });
+  check('vehiculo ajeno -> 403', other.status === 403, `fue ${other.status}`);
+
+  const noSuch = await req('POST', '/auctions', {
+    token: sellerToken,
+    body: { vehicleId: '00000000-0000-0000-0000-000000000000', startingPrice: 20000, endTime: new Date(Date.now() + 86400000).toISOString() },
+  });
+  check('vehiculo inexistente -> 404', noSuch.status === 404, `fue ${noSuch.status}`);
+
+  const past = await req('POST', '/auctions', {
+    token: sellerToken, body: { vehicleId: bothId, startingPrice: 20000, endTime: new Date(Date.now() - 1000).toISOString() },
+  });
+  check('endTime en el pasado -> 400', past.status === 400, `fue ${past.status}`);
+
+  const start = new Date(Date.now() + 86400000).toISOString();
+  const end = new Date(Date.now() + 172800000).toISOString();
+  const r = await req('POST', '/auctions', { token: sellerToken, body: { vehicleId: bothId, startingPrice: 20000, startTime: start, endTime: end } });
+  check('agendar -> 201', r.status === 201, `fue ${r.status} ${JSON.stringify(r.json)}`);
+  scheduledAuctionId = r.json?.data?.id ?? '';
+  check('  ...queda PENDING', r.json?.data?.status === 'PENDING', `quedo ${r.json?.data?.status}`);
+  check('  ...el vehiculo anidado ya figura IN_AUCTION', r.json?.data?.vehicle?.status === 'IN_AUCTION',
+    `quedo ${r.json?.data?.vehicle?.status}`);
+  check('  ...trae el vehiculo', r.json?.data?.vehicle?.title === 'Honda Civic', `quedo ${r.json?.data?.vehicle?.title}`);
+  check('  ...arranca sin pujas', r.json?.data?.bidCount === 0 && r.json?.data?.recentBids?.length === 0);
+
+  const dup = await req('POST', '/auctions', { token: sellerToken, body: { vehicleId: bothId, startingPrice: 20000, endTime: end } });
+  check('segunda subasta del mismo vehiculo -> 409', dup.status === 409, `fue ${dup.status}`);
+
+  const direct = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}S`.slice(0, 17), licensePlate: 'SMK-DIR', brand: 'Fiat', model: 'Cronos',
+      year: 2022, mileage: 20000, transmission: 'MANUAL', fuel: 'GASOLINE', category: 'COMPACT',
+      engine: '1.3L', power: '120 HP', drivetrain: 'FWD', basePrice: 25000, saleType: 'DIRECT_SALE',
+    },
+  });
+  const noAuction = await req('POST', '/auctions', {
+    token: sellerToken, body: { vehicleId: direct.json?.data?.id, startingPrice: 24000, endTime: end },
+  });
+  check('DIRECT_SALE no admite subasta -> 400', noAuction.status === 400, `fue ${noAuction.status}`);
+}
+
+section('GET /api/auctions');
+{
+  const list = await req('GET', '/auctions');
+  check('sin token -> 200', list.status === 200, `fue ${list.status}`);
+  check('  ...trae la pagina', Array.isArray(list.json?.data));
+  check('  ...incluye la subasta de alta', list.json?.data?.some((a) => a.id === scheduledAuctionId));
+
+  const byStatus = await req('GET', '/auctions?status=PENDING');
+  check('filtro por status', byStatus.json?.data?.every((a) => a.status === 'PENDING'),
+    `llego ${JSON.stringify(byStatus.json?.data?.map((a) => a.status))}`);
+  check('filtro por status excluye la ACTIVE', !byStatus.json?.data?.some((a) => a.id === auctionId));
+
+  const byVehicle = await req('GET', `/auctions?vehicleId=${vehicleId}`);
+  check('filtro por vehicleId', byVehicle.json?.data?.length === 1 && byVehicle.json.data[0].vehicleId === vehicleId,
+    `llego ${JSON.stringify(byVehicle.json?.meta)}`);
+  const badStatus = await req('GET', '/auctions?status=DESCONOCIDO');
+  check('status invalido -> 400', badStatus.status === 400, `fue ${badStatus.status}`);
+
+  const detail = await req('GET', `/auctions/${auctionId}`);
+  check('detalle sin token -> 200', detail.status === 200, `fue ${detail.status}`);
+  check('  ...trae el vehiculo', detail.json?.data?.vehicle?.id === vehicleId);
+  check('  ...trae al vendedor', detail.json?.data?.seller?.id === sellerId);
+  check('  ...sin ganador todavia', detail.json?.data?.currentWinner === null);
+  check('  ...no expone passwordHash', !JSON.stringify(detail.json).includes('$2b$'));
+  check('uuid inexistente -> 404', (await req('GET', '/auctions/00000000-0000-0000-0000-000000000000')).status === 404);
+}
+
+section('PATCH/DELETE /api/auctions/:id');
+{
+  const noAuth = await req('PATCH', `/auctions/${scheduledAuctionId}`, { body: { startingPrice: 1 } });
+  check('editar sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const other = await req('PATCH', `/auctions/${scheduledAuctionId}`, { token: regToken, body: { startingPrice: 1 } });
+  check('otro usuario edita -> 403', other.status === 403, `fue ${other.status}`);
+
+  const active = await req('PATCH', `/auctions/${auctionId}`, { token: sellerToken, body: { startingPrice: 100 } });
+  check('subasta ya ACTIVE -> 409', active.status === 409, `fue ${active.status}`);
+
+  const inverted = await req('PATCH', `/auctions/${scheduledAuctionId}`, {
+    token: sellerToken,
+    body: { startTime: new Date(Date.now() + 172800000).toISOString(), endTime: new Date(Date.now() + 86400000).toISOString() },
+  });
+  check('startTime posterior a endTime -> 400', inverted.status === 400, `fue ${inverted.status}`);
+
+  const edited = await req('PATCH', `/auctions/${scheduledAuctionId}`, { token: sellerToken, body: { startingPrice: 21000, minBidIncrement: 250 } });
+  check('editar PENDING -> 200', edited.status === 200, `fue ${edited.status}`);
+  check('  ...aplica el precio', edited.json?.data?.startingPrice === 21000, `quedo ${edited.json?.data?.startingPrice}`);
+  check('  ...aplica el incremento', edited.json?.data?.minBidIncrement === 250, `quedo ${edited.json?.data?.minBidIncrement}`);
+
+  const delNoAuth = await req('DELETE', `/auctions/${scheduledAuctionId}`);
+  check('borrar sin token -> 401', delNoAuth.status === 401, `fue ${delNoAuth.status}`);
+  const delOther = await req('DELETE', `/auctions/${scheduledAuctionId}`, { token: regToken });
+  check('borrar por otro -> 403', delOther.status === 403, `fue ${delOther.status}`);
+
+  const del = await req('DELETE', `/auctions/${scheduledAuctionId}`, { token: sellerToken });
+  check('cancelar -> 204', del.status === 204, `fue ${del.status}`);
+  const after = await req('GET', `/auctions/${scheduledAuctionId}`);
+  check('  ...queda CANCELLED', after.json?.data?.status === 'CANCELLED', `quedo ${after.json?.data?.status}`);
+  const backInCatalog = await req('GET', '/vehicles?q=civic');
+  check('  ...el vehiculo vuelve al catalogo', backInCatalog.json?.data?.some((v) => v.status === 'AVAILABLE'),
+    `llego ${JSON.stringify(backInCatalog.json?.data?.map((v) => v.status))}`);
+}
+
+section('DELETE /api/vehicles/:id (borrado logico)');
+{
+  const other = await req('DELETE', `/vehicles/${vehicleId}`, { token: regToken });
+  check('otro usuario -> 403', other.status === 403, `fue ${other.status}`);
+
+  const del = await req('DELETE', `/vehicles/${vehicleId}`, { token: sellerToken });
+  check('el dueno da de baja -> 204', del.status === 204, `fue ${del.status}`);
+  check('  ...ya no se puede ver', (await req('GET', `/vehicles/${vehicleId}`)).status === 404);
+  check('  ...no queda en el catalogo', !(await req('GET', '/vehicles?q=porsche')).json?.data?.some((v) => v.id === vehicleId));
+  check('  ...tampoco en /mine', !(await req('GET', '/vehicles/mine', { token: sellerToken })).json?.data?.some((v) => v.id === vehicleId));
+
+  // Dar de baja el vehiculo tiene que cancelar su subasta, no dejarla colgada.
+  const auctions = await req('GET', '/auctions');
+  check('  ...la subasta se cancela sola', !auctions.json?.data?.some((a) => a.id === auctionId && a.status !== 'CANCELLED'),
+    `llego ${JSON.stringify(auctions.json?.data?.map((a) => [a.id === auctionId, a.status]))}`);
+  check('  ...y desaparece del listado', !(await req('GET', `/auctions/${auctionId}`)).json?.data
+    || (await req('GET', `/auctions/${auctionId}`)).status === 404);
+}
+
+section('El alta de pujas todavia no existe');
+{
+  // Las pujas llegan con el servicio por socket. Mientras tanto la API tiene que
+  // negarse explicitamente, no devolver un 404 de ruta desconocida.
+  const noSuch = await req('POST', `/auctions/${scheduledAuctionId}/bids`, { token: sellerToken, body: { amount: 500 } });
+  check('POST /auctions/:id/bids no existe todavia', noSuch.status === 404, `fue ${noSuch.status}`);
+  check('  ...y el error es NOT_FOUND de ruta', noSuch.json?.error?.code === 'NOT_FOUND',
+    `llego ${JSON.stringify(noSuch.json?.error)}`);
+}
+
+// ---------------------------------------------------------------------------
+
 section('Socket.IO (handshake)');
 {
   const { io } = await import('socket.io-client');
@@ -609,9 +1056,19 @@ if (process.env.SMOKE_CLEANUP === '0') {
 } else {
   try {
     const { prisma } = await import('../src/lib/prisma.js');
-    const { count } = await prisma.user.deleteMany({ where: { email: { startsWith: 'smoke.' } } });
-    await prisma.$disconnect();
-    console.log(`Limpieza: ${count} usuario(s) smoke.* eliminados.\n`);
+      // El orden lo imponen los FKs: auctions.vehicleId y vehicles.sellerId son
+      // Restrict, asi que los vehiculos (y sus subastas) tienen que caer antes
+      // que los usuarios. Las imagenes y las pujas van en cascada.
+      const sellers = await prisma.user.findMany({ where: { email: { startsWith: 'smoke.' } }, select: { id: true } });
+      const sellerIds = sellers.map((u) => u.id);
+      const owned = await prisma.vehicle.findMany({ where: { sellerId: { in: sellerIds } }, select: { id: true } });
+      const vehicleIds = owned.map((v) => v.id);
+      const auctions = await prisma.auction.deleteMany({ where: { vehicleId: { in: vehicleIds } } });
+      const vehicles = await prisma.vehicle.deleteMany({ where: { sellerId: { in: sellerIds } } });
+      const { count } = await prisma.user.deleteMany({ where: { email: { startsWith: 'smoke.' } } });
+      await prisma.$disconnect();
+      console.log(`Limpieza: ${auctions.count} subasta(s), ${vehicles.count} vehiculo(s), `
+        + `${count} usuario(s) smoke.* eliminados.\n`);
   } catch (err) {
     console.log(`No se pudo limpiar (el servidor de la API puede seguir usando la DB): ${err.message}\n`);
   }

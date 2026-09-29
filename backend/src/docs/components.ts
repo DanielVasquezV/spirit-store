@@ -41,6 +41,33 @@ export const noContentResponse = (description: string) => ({
   description,
 });
 
+/** Envoltura de listado paginado. `data` es el arreglo de la página y `meta` trae el conteo. */
+export const paginatedEnvelope = (dataRef: string, description: string) => ({
+  description,
+  content: {
+    'application/json': {
+      schema: {
+        type: 'object',
+        required: ['success', 'data', 'meta'],
+        properties: {
+          success: { type: 'boolean', enum: [true], example: true },
+          data: { type: 'array', items: { $ref: dataRef } },
+          meta: {
+            type: 'object',
+            required: ['page', 'pageSize', 'total', 'totalPages'],
+            properties: {
+              page: { type: 'integer', example: 1 },
+              pageSize: { type: 'integer', example: 20 },
+              total: { type: 'integer', example: 42 },
+              totalPages: { type: 'integer', example: 3 },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
 // El cliente decide por `code`, que es estable; `message` está en español y
 // puede cambiar.
 export const errorResponse = (code: string, description: string, details?: unknown) => ({
@@ -319,6 +346,261 @@ export const errorSchemas = {
       bytes: { type: 'integer', example: 95 },
       format: { type: 'string', example: 'png' },
       resourceType: { type: 'string', enum: ['image', 'raw', 'video'], example: 'image' },
+    },
+  },
+
+  Fuel: {
+    type: 'string',
+    enum: ['GASOLINE', 'DIESEL', 'ELECTRIC', 'HYBRID'],
+    description: 'Combustible. La app lo muestra como "Gasolina", "Diésel", "Eléctrico" o "Híbrido".',
+    example: 'GASOLINE',
+  },
+
+  Category: {
+    type: 'string',
+    enum: ['SUV', 'SEDAN', 'SPORT', 'ELECTRIC', 'PICKUP', 'COMPACT'],
+    description: 'Segmento comercial, independiente del combustible: un eléctrico es su propia categoría, no un sedán.',
+    example: 'SUV',
+  },
+
+  Transmission: {
+    type: 'string',
+    enum: ['MANUAL', 'AUTOMATIC'],
+    description: 'La app lo muestra como "Manual" o "Automática".',
+    example: 'AUTOMATIC',
+  },
+
+  Condition: {
+    type: 'string',
+    enum: ['NEW', 'LIKE_NEW', 'USED', 'FOR_PARTS'],
+    example: 'USED',
+  },
+
+  SaleType: {
+    type: 'string',
+    enum: ['DIRECT_SALE', 'AUCTION', 'BOTH'],
+    description: 'La app lo traduce a los badges "Venta directa" y/o "Subasta".',
+    example: 'AUCTION',
+  },
+
+  VehicleStatus: {
+    type: 'string',
+    enum: ['DRAFT', 'AVAILABLE', 'IN_AUCTION', 'RESERVED', 'SOLD'],
+    description: '`DRAFT` es una publicación sin terminar: solo la ve su dueño, nunca el catálogo público.',
+    example: 'IN_AUCTION',
+  },
+
+  AuctionStatus: {
+    type: 'string',
+    enum: ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED'],
+    description: '`PENDING` es programada (empieza en el futuro); `ACTIVE` es la que la app muestra como "En vivo".',
+    example: 'ACTIVE',
+  },
+
+  VehicleImage: {
+    type: 'object',
+    required: ['id', 'url', 'position'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      url: { type: 'string', format: 'uri', description: 'URL de Cloudinary, ya transformada. Solo se acepta un host de Cloudinary.' },
+      publicId: { type: 'string', nullable: true, description: 'Identificador del asset. Es lo que hace falta para borrarlo de Cloudinary.' },
+      position: { type: 'integer', description: 'Orden en la galería. 0 es la portada.' },
+    },
+  },
+
+  VehicleSeller: {
+    type: 'object',
+    required: ['id', 'fullName', 'isVerified'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      fullName: { type: 'string' },
+      isVerified: { type: 'boolean', description: 'Tiene el DUI cargado, requisito para publicar.' },
+    },
+  },
+
+  VehicleAuction: {
+    type: 'object',
+    description: 'Resumen de la subasta del vehículo, para la ficha del catálogo. `null` si el vehículo no está en subasta.',
+    required: ['id', 'status', 'startingPrice', 'minBidIncrement', 'startTime', 'endTime'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      status: { $ref: '#/components/schemas/AuctionStatus' },
+      startingPrice: { type: 'number' },
+      currentBid: { type: 'number', nullable: true },
+      minBidIncrement: { type: 'number' },
+      startTime: { type: 'string', format: 'date-time' },
+      endTime: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  Vehicle: {
+    type: 'object',
+    required: ['id', 'sellerId', 'vin', 'licensePlate', 'brand', 'model', 'title', 'year', 'mileage', 'transmission', 'fuel', 'category', 'engine', 'power', 'drivetrain', 'condition', 'basePrice', 'saleType', 'status', 'images', 'seller'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      sellerId: { type: 'string', format: 'uuid' },
+      vin: { type: 'string', example: '1HGBH41JXMN109186' },
+      licensePlate: { type: 'string', example: 'P-345ABC' },
+      brand: { type: 'string', example: 'Porsche' },
+      model: { type: 'string', example: '911' },
+      title: { type: 'string', description: 'Derivado de `brand` + `model`, listo para pintar como nombre en la card.', example: 'Porsche 911' },
+      year: { type: 'integer', example: 2021 },
+      mileage: { type: 'integer', description: 'Kilómetros.', example: 12000 },
+      transmission: { $ref: '#/components/schemas/Transmission' },
+      fuel: { $ref: '#/components/schemas/Fuel' },
+      category: { $ref: '#/components/schemas/Category' },
+      engine: { type: 'string', description: 'Texto libre, lo publica la marca a su manera.', example: '3.0L Boxer Turbo' },
+      power: { type: 'string', example: '385 HP' },
+      drivetrain: { type: 'string', example: 'RWD' },
+      condition: { $ref: '#/components/schemas/Condition' },
+      color: { type: 'string', nullable: true },
+      basePrice: { type: 'number', description: 'Precio de referencia para venta directa. La subasta usa su propio `startingPrice`.', example: 128500 },
+      saleType: { $ref: '#/components/schemas/SaleType' },
+      status: { $ref: '#/components/schemas/VehicleStatus' },
+      description: { type: 'string', nullable: true },
+      images: { type: 'array', items: { $ref: '#/components/schemas/VehicleImage' } },
+      seller: { $ref: '#/components/schemas/VehicleSeller' },
+      auction: { nullable: true, allOf: [{ $ref: '#/components/schemas/VehicleAuction' }] },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  CreateVehicleRequest: {
+    type: 'object',
+    required: ['vin', 'licensePlate', 'brand', 'model', 'year', 'mileage', 'transmission', 'fuel', 'category', 'engine', 'power', 'drivetrain', 'basePrice', 'saleType'],
+    description: 'Requiere sesión y el DUI del vendedor cargado en el perfil. Ver `auction` para la forma de la subasta.',
+    properties: {
+      vin: { type: 'string', minLength: 5, maxLength: 17, example: '1HGBH41JXMN109186' },
+      licensePlate: { type: 'string', minLength: 3, maxLength: 12, example: 'P-345ABC' },
+      brand: { type: 'string', minLength: 2, maxLength: 40, example: 'Porsche' },
+      model: { type: 'string', minLength: 1, maxLength: 60, example: '911' },
+      year: { type: 'integer', example: 2021 },
+      mileage: { type: 'integer', min: 0, example: 12000 },
+      transmission: { $ref: '#/components/schemas/Transmission' },
+      fuel: { $ref: '#/components/schemas/Fuel' },
+      category: { $ref: '#/components/schemas/Category' },
+      engine: { type: 'string', minLength: 1, maxLength: 80, example: '3.0L Boxer Turbo' },
+      power: { type: 'string', minLength: 1, maxLength: 80, example: '385 HP' },
+      drivetrain: { type: 'string', minLength: 1, maxLength: 80, example: 'RWD' },
+      condition: { $ref: '#/components/schemas/Condition' },
+      color: { type: 'string', maxLength: 40, example: 'Rojo' },
+      basePrice: { type: 'number', description: 'Debe ser mayor a 0.', example: 128500 },
+      saleType: { $ref: '#/components/schemas/SaleType' },
+      description: { type: 'string', maxLength: 2000 },
+      images: {
+        type: 'array',
+        description: 'Fotos ya subidas con `/api/uploads/sign`. Cada `url` debe ser de Cloudinary.',
+        items: {
+          type: 'object',
+          required: ['url'],
+          properties: {
+            url: { type: 'string', format: 'uri' },
+            publicId: { type: 'string', description: 'Se guarda para poder borrar el asset de Cloudinary después.' },
+          },
+        },
+      },
+      auction: {
+        type: 'object',
+        description: 'Obligatorio si `saleType` es `AUCTION`; prohibido si es `DIRECT_SALE`; opcional en `BOTH`.',
+        required: ['startingPrice', 'endTime'],
+        properties: {
+          startingPrice: { type: 'number', example: 120000 },
+          endTime: { type: 'string', format: 'date-time', description: 'Debe ser futura.' },
+          startTime: { type: 'string', format: 'date-time', description: 'Si se omite, la subasta arranca de inmediato (queda `ACTIVE`).' },
+          minBidIncrement: { type: 'number', example: 10 },
+        },
+      },
+    },
+  },
+
+  UpdateVehicleRequest: {
+    type: 'object',
+    description: 'Todos los campos opcionales; los que no se mandan quedan intactos. Solo el dueño del vehículo o un ADMIN.',
+    properties: {
+      brand: { type: 'string', minLength: 2, maxLength: 40 },
+      model: { type: 'string', minLength: 1, maxLength: 60 },
+      year: { type: 'integer' },
+      mileage: { type: 'integer', min: 0 },
+      transmission: { $ref: '#/components/schemas/Transmission' },
+      fuel: { $ref: '#/components/schemas/Fuel' },
+      category: { $ref: '#/components/schemas/Category' },
+      engine: { type: 'string', minLength: 1, maxLength: 80 },
+      power: { type: 'string', minLength: 1, maxLength: 80 },
+      drivetrain: { type: 'string', minLength: 1, maxLength: 80 },
+      condition: { $ref: '#/components/schemas/Condition' },
+      color: { type: 'string', nullable: true },
+      basePrice: { type: 'number' },
+      status: {
+        type: 'string',
+        enum: ['DRAFT', 'AVAILABLE'],
+        description: [
+          'Solo se puede alternar entre borrador y publicado. `IN_AUCTION` lo',
+          'maneja el ciclo de vida de la subasta y `SOLD` el cierre de venta, así',
+          'que mandarlos responde 400. Mientras haya una subasta `PENDING` o',
+          '`ACTIVE` el cambio responde 409: hay que cancelar la subasta primero.',
+        ].join('\n'),
+      },
+      description: { type: 'string', nullable: true, maxLength: 2000 },
+    },
+  },
+
+  Bid: {
+    type: 'object',
+    required: ['id', 'amount', 'createdAt', 'bidder'],
+    description: 'Lectura del historial de pujas. La API todavía no expone un endpoint para **crear** pujas: eso llega con el servicio de subastas por socket.',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      amount: { type: 'number' },
+      createdAt: { type: 'string', format: 'date-time' },
+      bidder: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+    },
+  },
+
+  Auction: {
+    type: 'object',
+    required: ['id', 'vehicleId', 'sellerId', 'startingPrice', 'minBidIncrement', 'startTime', 'endTime', 'status', 'bidCount', 'recentBids', 'vehicle'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      vehicleId: { type: 'string', format: 'uuid' },
+      sellerId: { type: 'string', format: 'uuid' },
+      startingPrice: { type: 'number' },
+      currentBid: { type: 'number', nullable: true },
+      minBidIncrement: { type: 'number' },
+      currentWinner: { nullable: true, allOf: [{ type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } }] },
+      startTime: { type: 'string', format: 'date-time' },
+      endTime: { type: 'string', format: 'date-time' },
+      status: { $ref: '#/components/schemas/AuctionStatus' },
+      bidCount: { type: 'integer' },
+      recentBids: { type: 'array', items: { $ref: '#/components/schemas/Bid' } },
+      vehicle: { $ref: '#/components/schemas/Vehicle' },
+      seller: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  CreateAuctionRequest: {
+    type: 'object',
+    required: ['vehicleId', 'startingPrice', 'endTime'],
+    description: 'Programa una subasta para un vehículo propio que todavía no tiene una. Solo aplica a `saleType` `AUCTION` o `BOTH`.',
+    properties: {
+      vehicleId: { type: 'string', format: 'uuid' },
+      startingPrice: { type: 'number', example: 120000 },
+      endTime: { type: 'string', format: 'date-time', description: 'Debe ser futura.' },
+      startTime: { type: 'string', format: 'date-time', description: 'Si se omite, la subasta queda `ACTIVE` de inmediato.' },
+      minBidIncrement: { type: 'number', example: 10 },
+    },
+  },
+
+  UpdateAuctionRequest: {
+    type: 'object',
+    description: 'Solo se puede editar una subasta `PENDING`. Todos los campos opcionales.',
+    properties: {
+      startingPrice: { type: 'number' },
+      endTime: { type: 'string', format: 'date-time' },
+      startTime: { type: 'string', format: 'date-time' },
+      minBidIncrement: { type: 'number' },
     },
   },
 

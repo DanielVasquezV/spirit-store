@@ -58,6 +58,25 @@ enum Transmission {
   AUTOMATIC
 }
 
+/// Combustible, tal como lo filtra el catalogo del cliente.
+enum Fuel {
+  GASOLINE
+  DIESEL
+  ELECTRIC
+  HYBRID
+}
+
+/// Segmento comercial. No se deriva del combustible: un auto electrico es una
+/// categoria aparte de un SUV, y el catalogo filtra por las dos.
+enum Category {
+  SUV
+  SEDAN
+  SPORT
+  ELECTRIC
+  PICKUP
+  COMPACT
+}
+
 enum Condition {
   NEW
   LIKE_NEW
@@ -166,6 +185,14 @@ model Vehicle {
   year         Int
   mileage      Int
   transmission Transmission
+  fuel         Fuel
+  category     Category
+  /// Ficha tecnica que la app muestra como filas de "Mecanicas". Se guardan
+  /// como texto libre porque cada marca publica la potencia y el motor a su
+  /// manera ("385 HP", "Doble motor electrico") y no hay nada que calcular.
+  engine       String
+  power        String
+  drivetrain   String
   condition    Condition     @default(USED)
   color        String?
   /// Precio de referencia para venta directa. La subasta usa su propio
@@ -173,6 +200,12 @@ model Vehicle {
   basePrice    Decimal       @db.Decimal(12, 2)
   saleType     SaleType
   status       VehicleStatus @default(DRAFT)
+  /// Copia de marca + modelo en minusculas y sin acentos, para buscar. Existe
+  /// porque la extension `unaccent` de Postgres no esta disponible: con
+  /// `ILIKE` a secas "skoda" no encuentra "Skoda". Normalizando en la app se
+  /// resuelve sin depender de la instalacion de la base. `COLLATE "C"` para que
+  /// la comparacion sea igual en cualquier instalacion.
+  searchText   String        @default("")
   description  String?
   /// Embedding de la descripcion para busqueda semantica asistida por IA.
   /// `Unsupported` porque Prisma no expone el tipo pgvector de forma nativa.
@@ -206,6 +239,10 @@ model VehicleImage {
   id        String   @id @default(uuid()) @db.Uuid
   vehicleId String   @db.Uuid
   url       String
+  /// Identificador del asset en Cloudinary. Se guarda aparte de la url porque
+  /// es lo unico con lo que se puede derivar el recurso para borrarlo: la url
+  /// puede llevar transformaciones y no sirve para reconstruirlo.
+  publicId  String?
   /// Orden de presentacion en la galeria (0 = portada).
   position  Int      @default(0)
   createdAt DateTime @default(now()) @db.Timestamptz(3)

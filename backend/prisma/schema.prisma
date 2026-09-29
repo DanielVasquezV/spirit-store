@@ -1,26 +1,418 @@
+// SpiritApex - Modelo de datos completo.
+// Mapea db-er.mermaid: tablas en snake_case via @@map y campos en camelCase,
+// siguiendo la convencion ya establecida en el cliente Prisma del proyecto.
+//
+// Convenciones:
+//   * id      -> uuid v4 generado por la aplicacion
+//   * dinero  -> Decimal(12,2) (nunca float)
+//   * fechas  -> timestamptz, createdAt/updatedAt en toda entidad
+//   * borrado -> logico (deletedAt) en VEHICLES y CHATS; el resto es fisico
+//     segun el impacto en la trazabilidad (cascade o restrict)
+
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
+// El nombre debe ser el de la extension en Postgres, que es `vector`.
+// `pgvector` es el nombre del proyecto/imagen, no el de la extension: con
+// "pgvector" Prisma emite `CREATE EXTENSION "pgvector"` y Postgres responde
+// "extension pgvector is not available" (el control file es vector.control).
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [vector]
 }
 
+// ---------------------------------------------------------------------------
+// Enumeradores
+// ---------------------------------------------------------------------------
+
+/// Perfil de la cuenta. BUYER y SELLER no son excluyentes: un vendedor puede
+/// tambien comprar. ADMIN añade capacidades de moderacion.
 enum Role {
-  USER
+  BUYER
+  SELLER
   ADMIN
 }
 
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  password  String
-  role      Role     @default(USER)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+/// Como se ofrece el vehiculo.
+enum SaleType {
+  DIRECT_SALE
+  AUCTION
+  BOTH
+}
 
+/// Ciclo de vida comercial. DRAFT cubre el alta antes de cumplir los
+/// requisitos de enlistado (VIN + placa + DUI del vendedor).
+enum VehicleStatus {
+  DRAFT
+  AVAILABLE
+  IN_AUCTION
+  RESERVED
+  SOLD
+}
+
+enum Transmission {
+  MANUAL
+  AUTOMATIC
+}
+
+enum Condition {
+  NEW
+  LIKE_NEW
+  USED
+  FOR_PARTS
+}
+
+/// Origen del mensaje en una conversacion de compraventa.
+enum ChatType {
+  PURCHASE
+  SALE
+  AUCTION_WIN
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  OFFER
+}
+
+/// Quien envio el mensaje. Persistir la conversacion con el modelo permite
+/// auditar y reconstruir el diagnostico sin volver a llamar a Gemini.
+enum DiagnosticSender {
+  USER
+  AI_ASSISTANT
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum AuctionStatus {
+  PENDING
+  ACTIVE
+  FINISHED
+  CANCELLED
+}
+
+enum DiagnosticSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ---------------------------------------------------------------------------
+// Nucleo: USERS
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  /// Hash bcrypt de la contrasena. Nunca se selecciona en listados publicos.
+  passwordHash String
+  fullName     String
+  phoneNumber  String?
+  /// Documento de identidad del vendedor. Requisito para enlistar cualquier
+  /// vehiculo (regla de negocio de la plataforma, ver db-er.mermaid).
+  duiPhotoUrl  String?
+  role         Role     @default(BUYER)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  // 1:N - vehiculos que publica
+  vehicles     Vehicle[]
+  // 1:N - subastas que organizes
+  hostedAuctions Auction[]      @relation("AuctionSeller")
+  // 1:N - compras directas
+  orders       Order[]          @relation("OrderBuyer")
+  // 1:N - pujas
+  bids         Bid[]            @relation("BidBidder")
+  // 1:N - subastas donde va ganando
+  winningAuctions Auction[]     @relation("AuctionCurrentWinner")
+  // 1:N - conversaciones. El rol es contextual a la conversacion, por eso el
+  // mismo id aparece en ambas relaciones.
+  chatsAsBuyer Chat[]           @relation("ChatBuyer")
+  chatsAsSeller Chat[]          @relation("ChatSeller")
+  // 1:N - mensajes enviados
+  messages     Message[]        @relation("MessageSender")
+  // 1:N - diagnosticos de IA
+  diagnostics  AiDiagnostic[]
+  // N:M - favoritos del catalogo
+  favorites    VehicleFavorite[]
+
+  @@index([role])
+  @@index([isActive])
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Catalogo: VEHICLES / VEHICLE_IMAGES
+// ---------------------------------------------------------------------------
+
+model Vehicle {
+  id           String        @id @default(uuid()) @db.Uuid
+  sellerId     String        @db.Uuid
+  /// VIN: identificador fisico del vehiculo, unico en la plataforma.
+  vin          String        @unique
+  licensePlate String        @unique
+  brand        String
+  model        String
+  year         Int
+  mileage      Int
+  transmission Transmission
+  condition    Condition     @default(USED)
+  color        String?
+  /// Precio de referencia para venta directa. La subasta usa su propio
+  /// startingPrice en AUCTIONS.
+  basePrice    Decimal       @db.Decimal(12, 2)
+  saleType     SaleType
+  status       VehicleStatus @default(DRAFT)
+  description  String?
+  /// Embedding de la descripcion para busqueda semantica asistida por IA.
+  /// `Unsupported` porque Prisma no expone el tipo pgvector de forma nativa.
+  descriptionEmbedding Unsupported("vector(768)")?
+  deletedAt    DateTime?     @db.Timestamptz(3)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+
+  seller      User               @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  // 1:N - galeria
+  images      VehicleImage[]
+  // 1:1 - como mucho una orden de compra directa por vehiculo
+  order       Order?
+  // 1:1 - como mucho una subasta por vehiculo
+  auction     Auction?
+  // 1:N - conversaciones que referencian este vehiculo
+  chats       Chat[]
+  // 1:N - diagnosticos de IA hechos sobre este vehiculo
+  diagnostics AiDiagnostic[]
+  // N:M - marcado como favorito
+  favoritedBy VehicleFavorite[]
+
+  @@index([sellerId])
+  @@index([status, saleType])
+  @@index([brand, model])
+  @@index([basePrice])
+  @@map("vehicles")
+}
+
+model VehicleImage {
+  id        String   @id @default(uuid()) @db.Uuid
+  vehicleId String   @db.Uuid
+  url       String
+  /// Orden de presentacion en la galeria (0 = portada).
+  position  Int      @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@unique([vehicleId, position])
+  @@map("vehicle_images")
+}
+
+// ---------------------------------------------------------------------------
+// N:M explicito: favoritos del catalogo
+// ---------------------------------------------------------------------------
+
+/// Junction model explicito (no el N:M implicito de Prisma) para poder
+/// guardar `createdAt` del marcado, que el implicito no soporta.
+model VehicleFavorite {
+  userId    String   @db.Uuid
+  vehicleId String   @db.Uuid
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, vehicleId])
+  @@index([vehicleId])
+  @@map("vehicle_favorites")
+}
+
+// ---------------------------------------------------------------------------
+// Ventas directas: ORDERS
+// ---------------------------------------------------------------------------
+
+model Order {
+  id           String        @id @default(uuid()) @db.Uuid
+  vehicleId    String        @unique @db.Uuid
+  buyerId      String        @db.Uuid
+  /// Snapshot del precio al cerrar la operacion: si el vehiculo cambia de
+  /// precio despues, el historico contractual no debe moverse.
+  totalAmount  Decimal       @db.Decimal(12, 2)
+  paymentStatus PaymentStatus @default(PENDING)
+  /// Referencia del gateway (Stripe/PayPal). Unica para idempotencia de cobros.
+  paymentGatewayId String?   @unique
+  completedAt  DateTime?     @db.Timestamptz(3)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  buyer   User    @relation("OrderBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+
+  @@index([buyerId])
+  @@index([paymentStatus])
+  @@map("orders")
+}
+
+// ---------------------------------------------------------------------------
+// Subastas: AUCTIONS / BIDS
+// ---------------------------------------------------------------------------
+
+model Auction {
+  id              String        @id @default(uuid()) @db.Uuid
+  vehicleId       String        @unique @db.Uuid
+  sellerId        String        @db.Uuid
+  startingPrice   Decimal       @db.Decimal(12, 2)
+  /// Puja vigente, denormalizada para no calcular MAX/COUNT en cada lectura del
+  /// socket. AuctionService la actualiza en la misma transaccion que inserta
+  /// la puja, de modo que nunca diverge de BIDS.
+  currentBid      Decimal?      @db.Decimal(12, 2)
+  /// Sobreoferta minima, para frenar pujas spam.
+  minBidIncrement Decimal       @default(10) @db.Decimal(12, 2)
+  currentWinnerId String?       @db.Uuid
+  startTime       DateTime      @db.Timestamptz(3)
+  endTime         DateTime      @db.Timestamptz(3)
+  status          AuctionStatus @default(PENDING)
+  createdAt       DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @db.Timestamptz(3)
+
+  vehicle       Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  seller        User    @relation("AuctionSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  currentWinner User?   @relation("AuctionCurrentWinner", fields: [currentWinnerId], references: [id], onDelete: SetNull)
+  // 1:N - historial completo de pujas
+  bids          Bid[]
+
+  @@index([status, startTime, endTime])
+  @@index([sellerId])
+  @@index([currentWinnerId])
+  @@map("auctions")
+}
+
+model Bid {
+  id        String   @id @default(uuid()) @db.Uuid
+  auctionId String   @db.Uuid
+  bidderId  String   @db.Uuid
+  amount    Decimal  @db.Decimal(12, 2)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  auction Auction @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidder  User    @relation("BidBidder", fields: [bidderId], references: [id], onDelete: Restrict)
+
+  // Indice del hot path de subastas: maxima puja por subasta.
+  @@index([auctionId, amount])
+  @@index([bidderId])
+  @@map("bids")
+}
+
+// ---------------------------------------------------------------------------
+// Mensajeria: CHATS / MESSAGES
+// ---------------------------------------------------------------------------
+
+model Chat {
+  id        String   @id @default(uuid()) @db.Uuid
+  vehicleId String?  @db.Uuid
+  buyerId   String   @db.Uuid
+  sellerId  String   @db.Uuid
+  chatType  ChatType @default(PURCHASE)
+  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  buyer   User     @relation("ChatBuyer", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller  User     @relation("ChatSeller", fields: [sellerId], references: [id], onDelete: Restrict)
+  // 1:N - hilo de la conversacion
+  messages Message[]
+
+  // Evita abrir varias conversaciones del mismo par sobre el mismo vehiculo.
+  // vehicleId es opcional (preguntas generales), asi que el indice unico
+  // parcial solo aplica cuando hay vehiculo de por medio.
+  @@unique([vehicleId, buyerId, sellerId])
+  @@index([buyerId, updatedAt])
+  @@index([sellerId, updatedAt])
+  @@map("chats")
+}
+
+model Message {
+  id          String      @id @default(uuid()) @db.Uuid
+  chatId      String      @db.Uuid
+  senderId    String      @db.Uuid
+  content     String
+  messageType MessageType @default(TEXT)
+  /// Payload de IMAGE/OFFER (url de la imagen, monto de la oferta).
+  metadata    Json?
+  isRead      Boolean     @default(false)
+  createdAt   DateTime    @default(now()) @db.Timestamptz(3)
+
+  chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender User @relation("MessageSender", fields: [senderId], references: [id], onDelete: Restrict)
+
+  @@index([chatId, createdAt])
+  @@index([senderId])
+  @@map("messages")
+}
+
+// ---------------------------------------------------------------------------
+// Asistente de diagnostico: AI_DIAGNOSTICS / AI_DIAGNOSTIC_MESSAGES
+// ---------------------------------------------------------------------------
+
+model AiDiagnostic {
+  id      String @id @default(uuid()) @db.Uuid
+  userId  String @db.Uuid
+  /// Opcional: permite diagnosticar desde la ficha de un vehiculo del catalogo.
+  vehicleId String? @db.Uuid
+  /// Datos del vehiculo al que aplica el diagnostico. Opcionales porque el
+  /// usuario puede describir la falla sin tener identificado el modelo.
+  vehicleBrand String?
+  vehicleModel String?
+  vehicleYear  Int?
+  mileage      Int?
+  /// Descripcion corta de la falla declarada por el usuario.
+  title     String
+  /// Sintomas estructurados que se inyectan como contexto en el prompt.
+  symptoms  Json?
+  /// Diagnostico final emitido por el modelo, listo para mostrar.
+  summary   String?
+  /// Confianza del modelo (0..1) para priorizar y advertir al usuario.
+  confidence Float?
+  /// Veredicto de seguridad: no autorizar la circulacion si es CRITICAL/HIGH.
+  severity   DiagnosticSeverity?
+  resolved   Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(3)
+
+  user     User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle  Vehicle?               @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  messages AiDiagnosticMessage[]
+
+  @@index([userId, createdAt])
+  @@index([vehicleId])
+  @@index([severity])
+  @@map("ai_diagnostics")
+}
+
+model AiDiagnosticMessage {
+  id           String           @id @default(uuid()) @db.Uuid
+  diagnosticId String           @db.Uuid
+  sender       DiagnosticSender
+  content      String
+  /// Modelo que genero la respuesta (p. ej. `gemini-2.0-flash`). Permite
+  /// auditar que respuestas produjo cada version del modelo.
+  model        String?
+  /// Prompt completo enviado a Gemini, para reproducir el diagnostico.
+  promptSnapshot String?
+  createdAt    DateTime         @default(now()) @db.Timestamptz(3)
+
+  diagnostic AiDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)
+
+  @@index([diagnosticId, createdAt])
+  @@index([sender])
+  @@map("ai_diagnostic_messages")
 }

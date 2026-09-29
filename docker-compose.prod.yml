@@ -2,7 +2,9 @@ name: spirit-store-prod
 
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector: el catalogo usa VEHICLES.descriptionEmbedding (vector(768)) para
+    # busqueda semantica. postgres:16-alpine no trae la extension.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-spirit_store}

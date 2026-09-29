@@ -6,17 +6,19 @@ import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Colors, FontFamily, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { CART_COUNT } from '@/lib/mock-data';
+import { CHAT_THREADS } from '@/lib/mock-data';
 
 type FeatherName = ComponentProps<typeof Feather>['name'];
 
 const TAB_ICON: Record<string, FeatherName> = {
   index: 'home',
-  explore: 'compass',
-  cart: 'shopping-bag',
+  search: 'search',
+  auctions: 'activity',
+  chats: 'message-circle',
   profile: 'user',
 };
 
+const CHAT_UNREAD = CHAT_THREADS.reduce((total, thread) => total + thread.unread, 0);
 const SHELL_RADIUS = Radius.xl;
 const PAD = Spacing.xs + 2;
 const SLIDE_EASING = Easing.bezier(0.22, 1, 0.36, 1);
@@ -69,7 +71,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
           }
         };
 
-        const showBadge = route.name === 'cart' && CART_COUNT > 0;
+        const showBadge = route.name === 'chats' && CHAT_UNREAD > 0;
 
         return (
           <Pressable
@@ -91,7 +93,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
               <Feather name={icon} size={24} color={focused ? Colors.text : Colors.textMuted} />
               {showBadge ? (
                 <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{CART_COUNT}</Text>
+                  <Text style={styles.badgeText}>{CHAT_UNREAD}</Text>
                 </View>
               ) : null}
             </View>

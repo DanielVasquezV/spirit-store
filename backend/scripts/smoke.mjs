@@ -1401,6 +1401,140 @@ section('Socket.IO (handshake)');
 
 // ---------------------------------------------------------------------------
 
+section('Invariante de cierre (barrido de todas las subastas)');
+{
+  // El timer de 15s corrio durante toda la suite contra datos reales, asi que
+  // este barrido es la red que atrapa el cierre decidido con una lectura vieja:
+  // una subasta cerrada CON ganador tiene que tener el vehiculo SOLD. Si el
+  // cierre no serializa contra las pujas, el timer puede mandar a AVAILABLE un
+  // vehiculo que ya tiene comprador y queda a la venta en el catalogo.
+  //
+  // Va contra prisma y no contra la API justamente para poder mirar el estado
+  // crudo de las dos tablas a la vez: por HTTP se verian consistentes todavia.
+  const { prisma } = await import('../src/lib/prisma.js');
+  const rows = await prisma.auction.findMany({
+    select: {
+      id: true,
+      status: true,
+      currentWinnerId: true,
+      vehicle: { select: { id: true, status: true } },
+      bids: { select: { id: true } },
+    },
+  });
+
+  const rotas = rows.filter((a) => {
+    const vendido = a.status === 'FINISHED' && a.currentWinnerId !== null;
+    const coherente = a.status !== 'FINISHED'
+      || (a.currentWinnerId === null ? a.vehicle.status !== 'SOLD' : a.vehicle.status === 'SOLD');
+    return vendido && !coherente;
+  });
+
+  check('hay subastas para revisar', rows.length > 0, `solo hay ${rows.length}`);
+  check('ninguna subasta cerrada con ganador tiene el vehiculo en otro estado', rotas.length === 0,
+    rotas.map((a) => `${a.id.slice(0, 8)} winner=${a.currentWinnerId} vehiculo=${a.vehicle.status}`).join(', '));
+
+  const sinPujasEnVenta = rows.filter(
+    (a) => a.status === 'FINISHED' && a.currentWinnerId === null && a.vehicle.status === 'SOLD',
+  );
+  check('ninguna subasta sin pujas dejo el vehiculo vendido', sinPujasEnVenta.length === 0,
+    sinPujasEnVenta.map((a) => a.id.slice(0, 8)).join(', '));
+
+  // Invariante denormalizado: currentBid y currentWinnerId no pueden divergir
+  // de MAX(bids). placeBid los escribe en la misma transaccion que la puja.
+  const divergentes = rows.filter((a) => a.currentWinnerId === null && a.vehicle.status === 'SOLD');
+  check('currentWinnerId y las pujas no divergen', divergentes.length === 0,
+    divergentes.map((a) => a.id.slice(0, 8)).join(', '));
+
+  // -------------------------------------------------------------------------
+  // El test que de verdad reproduce el bug.
+  //
+  // El barrido de arriba es una red: mira el resultado, pero no fuerza el
+  // entrelazado, asi que pasa con el bug puesto (comprobado). Este lo fuerza:
+  // dos transacciones reales de prisma, la puja con el lock tomado y sin
+  // commitear, y el cierre del timer pyrofiando la fila.
+  //
+  // Sin serializar, el timer lee `winner = null`, la puja comitea con ganador, y
+  // el timer cierra con el dato viejo dejando el vehiculo AVAILABLE: un auto ya
+  // vendido a la venta en el catalogo. Con el lock, el cierre espera, relee y ve
+  // al ganador.
+  {
+    const stamp = Date.now();
+    const tag = `smoke.lock${stamp}`;
+    const mkUser = async (suffix, role) => {
+      const email = `${tag}.${suffix}@spirit.dev`;
+      created.push(email);
+      return prisma.user.create({ data: { email, passwordHash: 'x', fullName: `Lock ${suffix}`, role } });
+    };
+    const lockSeller = await mkUser('s', 'SELLER');
+    const lockWinner = await mkUser('w', 'BUYER');
+
+    const lv = await prisma.vehicle.create({
+      data: {
+        sellerId: lockSeller.id, vin: `LCK${stamp}`.slice(0, 17), licensePlate: `LCK${stamp}`,
+        brand: 'Kia', model: 'Rio', year: 2020, mileage: 30000, transmission: 'MANUAL', fuel: 'GASOLINE',
+        category: 'COMPACT', engine: '1.6L', power: '120 HP', drivetrain: 'FWD', basePrice: '9000',
+        saleType: 'BOTH', status: 'IN_AUCTION',
+      },
+    });
+    const la = await prisma.auction.create({
+      data: {
+        vehicleId: lv.id, sellerId: lockSeller.id, startingPrice: '9000', minBidIncrement: '100',
+        startTime: new Date(Date.now() - 60_000), endTime: new Date(Date.now() - 30_000), status: 'ACTIVE',
+      },
+    });
+
+    const { finalizeAuction } = await import('../src/modules/auction/auction.state.js');
+
+    let pujando = () => {};
+    const conLock = new Promise((r) => { pujando = r; });
+    let comitear = () => {};
+    const puedeComitear = new Promise((r) => { comitear = r; });
+
+    // La puja: mismo lock que usa placeBid, y se queda abierta.
+    const bidTx = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM auctions WHERE id = ${la.id}::uuid FOR UPDATE`;
+      await tx.bid.create({ data: { auctionId: la.id, bidderId: lockWinner.id, amount: '9500' } });
+      await tx.auction.update({
+        where: { id: la.id },
+        data: { currentBid: '9500', currentWinnerId: lockWinner.id },
+      });
+      pujando();
+      await puedeComitear;
+    }, { timeout: 30000 });
+
+    await conLock;
+    const cierre = prisma.$transaction(async (tx) => finalizeAuction(tx, la.id), { timeout: 30000 });
+
+    // Si el cierre resolviera antes de que la puja comitee, es que no bloqueo y
+    // esta leyendo una fila que otro flujo todavia no comiteo.
+    const resolvioAntes = await Promise.race([
+      cierre.then(() => true),
+      sleep(1200).then(() => false),
+    ]);
+    check('el cierre no resuelve mientras la puja tiene el lock', resolvioAntes === false,
+      'el cierre decidio sin esperar al lock de la puja');
+
+    comitear();
+    await bidTx;
+    const closure = await cierre;
+    check('el cierre ve al ganador que la puja acaba de fijar',
+      closure?.winnerId === lockWinner.id, `llego ${String(closure?.winnerId)}`);
+
+    const lvAfter = await prisma.vehicle.findUniqueOrThrow({ where: { id: lv.id } });
+    check('el vehiculo con ganador queda SOLD, no AVAILABLE',
+      lvAfter.status === 'SOLD', `quedo ${lvAfter.status}`);
+
+    await prisma.bid.deleteMany({ where: { auctionId: la.id } });
+    await prisma.auction.deleteMany({ where: { id: la.id } });
+    await prisma.vehicle.deleteMany({ where: { id: lv.id } });
+    await prisma.user.deleteMany({ where: { email: { startsWith: tag } } });
+  }
+
+  await prisma.$disconnect();
+}
+
+// ---------------------------------------------------------------------------
+
 console.log(`\n${'='.repeat(52)}`);
 console.log(`  ${pass} ok  |  ${fail} fallas  |  ${skip} omitidos`);
 console.log(`  base: ${BASE}`);

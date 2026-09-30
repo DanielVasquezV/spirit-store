@@ -67,6 +67,15 @@ export interface AuctionClosure {
  * cierre dos veces.
  */
 export async function finalizeAuction(tx: Db, auctionId: string): Promise<AuctionClosure | null> {
+  // El cierre decide el destino del vehiculo a partir de `currentWinnerId`, asi
+  // que esa lectura tiene que ser fresca y estar serializada contra las pujas.
+  // Sin este lock el timer puede leer `winner = null`, dejar entrar una puja y
+  // despues mandar a `AVAILABLE` un vehiculo que ya tiene ganador: el vehiculo
+  // queda a la venta en el catalogo estando la subasta ya cerrada con comprador.
+  // Re-lquear es gratis cuando el que llama ya lo tiene tomado (misma
+  // transaccion, la fila ya es suya) y obligatoire cuando entra el timer.
+  await lockAuctionRow(tx, auctionId);
+
   const auction = await tx.auction.findUnique({
     where: { id: auctionId },
     select: { id: true, vehicleId: true, status: true, currentWinnerId: true, currentBid: true },

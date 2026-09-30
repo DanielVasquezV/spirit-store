@@ -2,7 +2,8 @@ import Feather from '@expo/vector-icons/Feather';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useRef } from 'react';
 import type { ComponentProps } from 'react';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+// Tipos desde la copia que usa expo-router: el paquete suelto de bottom-tabs puede desfasarse.
+import type { BottomTabBarProps } from 'expo-router/build/react-navigation/bottom-tabs/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Colors, FontFamily, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';

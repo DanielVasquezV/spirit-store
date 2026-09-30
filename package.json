@@ -43,6 +43,7 @@
     "unrs-resolver@1.12.2": true
   },
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.16",
     "expo": "^57.0.25"
   }
 }

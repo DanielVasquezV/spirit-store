@@ -66,7 +66,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bg,
     overflow: 'hidden',
   },
-  gradient: { ...StyleSheet.absoluteFillObject },
+  gradient: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 },
   input: {
     height: 44,
     paddingHorizontal: Spacing.lg,

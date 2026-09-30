@@ -18,6 +18,11 @@ export type Fuel = (typeof FUEL_OPTIONS)[number];
 
 export type ProductTech = { engine: string; power: string; drivetrain: string };
 
+// Fotos de relleno determinísticas; se reemplazan por las del vehículo real.
+function placeholderImages(id: string): string[] {
+  return [1, 2, 3].map((n) => `https://picsum.photos/seed/spirit-${id}-${n}/1200/800`);
+}
+
 export type Product = {
   id: string;
   title: string;
@@ -31,6 +36,7 @@ export type Product = {
   saleType: SaleType;
   price: number;
   tech: ProductTech;
+  images: string[];
 };
 
 export const MOCK_VEHICLES: Product[] = [
@@ -47,6 +53,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'DIRECT_SALE',
     price: 42900,
     tech: { engine: '2.8L Diésel Turbo', power: '204 HP', drivetrain: '4x4' },
+    images: placeholderImages('p1'),
   },
   {
     id: 'p2',
@@ -61,6 +68,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'BOTH',
     price: 38900,
     tech: { engine: '2.0L Turbo', power: '258 HP', drivetrain: 'RWD' },
+    images: placeholderImages('p2'),
   },
   {
     id: 'p3',
@@ -75,6 +83,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'AUCTION',
     price: 128500,
     tech: { engine: '3.0L Boxer Turbo', power: '385 HP', drivetrain: 'RWD' },
+    images: placeholderImages('p3'),
   },
   {
     id: 'p4',
@@ -89,6 +98,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'DIRECT_SALE',
     price: 47500,
     tech: { engine: 'Doble motor eléctrico', power: '346 HP', drivetrain: 'AWD' },
+    images: placeholderImages('p4'),
   },
   {
     id: 'p5',
@@ -103,6 +113,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'DIRECT_SALE',
     price: 31800,
     tech: { engine: '2.0L TSI Turbo', power: '245 HP', drivetrain: 'FWD' },
+    images: placeholderImages('p5'),
   },
   {
     id: 'p6',
@@ -117,6 +128,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'AUCTION',
     price: 52900,
     tech: { engine: '5.3L V8', power: '355 HP', drivetrain: '4x4' },
+    images: placeholderImages('p6'),
   },
   {
     id: 'p7',
@@ -131,6 +143,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'AUCTION',
     price: 142000,
     tech: { engine: '3.0L Diésel', power: '286 HP', drivetrain: 'AWD' },
+    images: placeholderImages('p7'),
   },
   {
     id: 'p8',
@@ -145,6 +158,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'DIRECT_SALE',
     price: 27500,
     tech: { engine: '1.5L VTEC Turbo', power: '200 HP', drivetrain: 'FWD' },
+    images: placeholderImages('p8'),
   },
   {
     id: 'p9',
@@ -159,6 +173,7 @@ export const MOCK_VEHICLES: Product[] = [
     saleType: 'BOTH',
     price: 45000,
     tech: { engine: '5.0L V8', power: '450 HP', drivetrain: 'RWD' },
+    images: placeholderImages('p9'),
   },
 ];
 

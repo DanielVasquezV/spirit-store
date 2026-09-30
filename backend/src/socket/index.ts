@@ -6,6 +6,9 @@ import { SOCKET_EVENTS, SOCKET_IO_OPTIONS, SOCKET_ROOMS } from '../config/socket
 import { ERROR_CODES } from '../lib/api-response.js';
 import { AppError } from '../middleware/error-handler.js';
 import { verifyAccessToken } from '../lib/jwt.js';
+import { isUuid } from '../lib/validate.js';
+import { prisma } from '../lib/prisma.js';
+import { setAuctionRealtimeSink } from './realtime.js';
 import type { AuthTokenPayload } from '../lib/jwt.js';
 
 // Lo que deja authorizeHandshake. Va en socket.data porque sobrevive a los
@@ -63,6 +66,27 @@ const emitError = (socket: Socket, code: string, message: string): void => {
 export function initSocketServer(httpServer: HttpServer): SocketServer {
   const io = new Server(httpServer, SOCKET_IO_OPTIONS);
 
+  // Los servicios de pujas y de subastas empujan eventos aca sin conocer esta
+  // instancia. Se registra antes que nada para que una puja que llegue durante
+  // el arranque no se quede sin emitir.
+  setAuctionRealtimeSink({
+    bidPlaced: (event) => {
+      // A la sala de la subasta: todos los que la están mirando.
+      io.to(SOCKET_ROOMS.auction(event.auctionId)).emit(SOCKET_EVENTS.auction.bidPlaced, event);
+    },
+    outbid: (event) => {
+      // A la sala personal del desplazado, para que se entere aunque tenga la
+      // pantalla de la subasta en background.
+      io.to(SOCKET_ROOMS.user(event.previousWinnerId)).emit(SOCKET_EVENTS.auction.outbid, event);
+    },
+    started: (event) => {
+      io.to(SOCKET_ROOMS.auction(event.auctionId)).emit(SOCKET_EVENTS.auction.started, event);
+    },
+    closed: (event) => {
+      io.to(SOCKET_ROOMS.auction(event.auctionId)).emit(SOCKET_EVENTS.auction.closed, event);
+    },
+  });
+
   io.use(authorizeHandshake);
 
   io.on('connection', (socket) => {
@@ -81,16 +105,28 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
     // Que el timer no mantenga vivo el proceso.
     forceReconnect.unref();
 
-    // Salas de recurso. La pertenencia (que el chat sea del usuario, por ejemplo)
-    // se valida contra la base de datos cuando existan esos servicios; acá solo
-    // se gestiona la suscripción.
+    // Salas de recurso. La pertenencia se valida contra la base: entrar a la sala de
+    // una subasta es recibir todas las pujas de esa subasta, y sin este chequeo
+    // cualquier cuenta autenticada se suscribiria a las de todos los demas.
     socket.on(SOCKET_EVENTS.auction.join, (payload: { auctionId?: unknown } = {}) => {
-      if (typeof payload.auctionId !== 'string') {
+      const auctionId = payload.auctionId;
+      if (typeof auctionId !== 'string' || !isUuid(auctionId)) {
         emitError(socket, ERROR_CODES.VALIDATION, 'auctionId is required');
         return;
       }
-      void socket.join(SOCKET_ROOMS.auction(payload.auctionId));
-      socket.emit(SOCKET_EVENTS.auction.join, { auctionId: payload.auctionId });
+      // El mismo criterio de lectura que GET /auctions/:id: no se entra a la sala
+      // de una subasta borrada.
+      void prisma.auction
+        .findFirst({ where: { id: auctionId, vehicle: { deletedAt: null } }, select: { id: true } })
+        .then((auction) => {
+          if (!auction) {
+            emitError(socket, ERROR_CODES.NOT_FOUND, 'Auction not found');
+            return;
+          }
+          void socket.join(SOCKET_ROOMS.auction(auctionId));
+          socket.emit(SOCKET_EVENTS.auction.join, { auctionId });
+        })
+        .catch(() => emitError(socket, ERROR_CODES.INTERNAL, 'No se pudo entrar a la subasta'));
     });
 
     socket.on(SOCKET_EVENTS.auction.leave, (payload: { auctionId?: unknown } = {}) => {
@@ -98,6 +134,10 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
       void socket.leave(SOCKET_ROOMS.auction(payload.auctionId));
     });
 
+    // El chat todavia no tiene servicio ni endpoints, asi que no hay nada que
+    // autorizar: se deja la suscripcion sin validar a proposito para no fingir un
+    // control que no existe. Cuando exista el modulo de chat, aca va el chequeo de
+    // que el chat sea del usuario.
     socket.on(SOCKET_EVENTS.chat.join, (payload: { chatId?: unknown } = {}) => {
       if (typeof payload.chatId !== 'string') return;
       void socket.join(SOCKET_ROOMS.chat(payload.chatId));
@@ -117,6 +157,9 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
     io,
     close: () =>
       new Promise<void>((resolve) => {
+        // Desenganchar el sink antes de cerrar: si el servidor HTTP sigue vivo
+        // un instante mas, una puja no debe colgarse en una instancia muerta.
+        setAuctionRealtimeSink(null);
         // Sin cerrar las conexiones activas el proceso no termina.
         io.close(() => resolve());
       }),

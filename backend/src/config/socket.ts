@@ -48,6 +48,7 @@ export const SOCKET_EVENTS = {
   auction: {
     join: 'auction:join',
     leave: 'auction:leave',
+    started: 'auction:started',
     bidPlaced: 'auction:bid-placed',
     outbid: 'auction:outbid',
     closed: 'auction:closed',

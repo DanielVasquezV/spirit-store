@@ -4,7 +4,8 @@
  *   npm run dev            # en otra terminal
  *   npm run smoke          # aca
  *
- * Cubre los 11 endpoints de /api. No necesita framework de tests: son
+ * Cubre todos los endpoints de /api, incluidas las pujas y su push por socket.
+ * No necesita framework de tests: son
  * aserciones sobre fetch, asi que corre en cualquier Node >= 18 sin instalar
  * nada extra. Sale con codigo 1 si algo falla, para poder engancharlo a CI.
  *
@@ -1001,14 +1002,375 @@ section('DELETE /api/vehicles/:id (borrado logico)');
     || (await req('GET', `/auctions/${auctionId}`)).status === 404);
 }
 
-section('El alta de pujas todavia no existe');
+// ---------------------------------------------------------------------------
+
+// Todo lo de pujas necesita postores que no sean el vendedor, asi que se crean
+// cuentas propias. El prefijo smoke. las hace borrables por la limpieza final.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Espera a que fn devuelva algo truthy. Necesario porque el cierre de subastas lo
+ * hace el timer cada 15s y tambien el endpoint manual: cual de los dos corra
+ * primero es una carrera, y un test que suppose que fue el manual falla una de
+ * cada quince corridas sin que haya ningun bug de por medio.
+ */
+const waitFor = async (fn, timeoutMs = 20_000, everyMs = 250) => {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await fn();
+    if (value) return value;
+    if (Date.now() > deadline) return null;
+    await sleep(everyMs);
+  }
+};
+
+const bidders = [];
+for (const [i, tag] of ['b1', 'b2', 'b3'].entries()) {
+  const email = uniqueEmail(tag);
+  created.push(email);
+  const r = await req('POST', '/auth/register', {
+    body: { email, password: 'Pujador1!', fullName: `Pujador ${tag}`, phone: `+54 9 11 4000-100${i}` },
+  });
+  bidders.push({ tag, token: r.json?.data?.accessToken ?? '', id: r.json?.data?.user?.id ?? '' });
+}
+const [b1, b2, b3] = bidders;
+
+// `BOTH` y no `AUCTION`: la subasta se crea despues con POST /auctions, y un
+// vehiculo `AUCTION` exige el bloque `auction` anidado en el alta. Devolver '' en
+// silencio hacia que los asserts siguientes fallaran con ids vacios en vez de
+// decir que fallo el alta, asi que estos helpers se quejan.
+const mkVehicle = async (tag, saleType = 'BOTH') => {
+  const r = await req('POST', '/vehicles', {
+    token: sellerToken,
+    body: {
+      vin: `VIN${Date.now()}${tag}`.slice(0, 17), licensePlate: `SMK-${tag}`,
+      brand: 'Toyota', model: 'Corolla', year: 2021, mileage: 40000, transmission: 'AUTOMATIC',
+      fuel: 'GASOLINE', category: 'SEDAN', engine: '2.0L', power: '150 HP', drivetrain: 'FWD',
+      basePrice: 10000, saleType,
+    },
+  });
+  if (r.status !== 201) {
+    throw new Error(`mkVehicle(${tag}) -> ${r.status} ${JSON.stringify(r.json)}`);
+  }
+  return r.json?.data?.id ?? '';
+};
+
+const mkAuction = async (tag, { startingPrice = 10000, minBidIncrement = 250, startInMs = 0, endInMs = 300000 } = {}) => {
+  const vehicleId = await mkVehicle(tag);
+  const r = await req('POST', '/auctions', {
+    token: sellerToken,
+    body: {
+      vehicleId, startingPrice, minBidIncrement,
+      ...(startInMs > 0 ? { startTime: new Date(Date.now() + startInMs).toISOString() } : {}),
+      endTime: new Date(Date.now() + endInMs).toISOString(),
+    },
+  });
+  if (r.status !== 201) {
+    throw new Error(`mkAuction(${tag}) -> ${r.status} ${JSON.stringify(r.json)}`);
+  }
+  return { vehicleId, auctionId: r.json?.data?.id ?? '', status: r.json?.data?.status };
+};
+
+section('POST /api/auctions/:id/bids (validacion)');
+const live = await mkAuction('LIVE');
 {
-  // Las pujas llegan con el servicio por socket. Mientras tanto la API tiene que
-  // negarse explicitamente, no devolver un 404 de ruta desconocida.
-  const noSuch = await req('POST', `/auctions/${scheduledAuctionId}/bids`, { token: sellerToken, body: { amount: 500 } });
-  check('POST /auctions/:id/bids no existe todavia', noSuch.status === 404, `fue ${noSuch.status}`);
-  check('  ...y el error es NOT_FOUND de ruta', noSuch.json?.error?.code === 'NOT_FOUND',
-    `llego ${JSON.stringify(noSuch.json?.error)}`);
+  check('subasta de prueba creada y activa', live.auctionId !== '' && live.status === 'ACTIVE', `quedo ${live.status}`);
+
+  const noAuth = await req('POST', `/auctions/${live.auctionId}/bids`, { body: { amount: 10000 } });
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const noAmount = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: {} });
+  check('sin amount -> 400', noAmount.status === 400, `fue ${noAmount.status}`);
+  check('  ...detalle en "amount"', Boolean(noAmount.json?.error?.details?.['amount']),
+    `llegan ${Object.keys(noAmount.json?.error?.details ?? {}).join(',')}`);
+
+  const notNumber = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 'mucho' } });
+  check('amount no numerico -> 400', notNumber.status === 400, `fue ${notNumber.status}`);
+
+  const zero = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 0 } });
+  check('amount 0 -> 400', zero.status === 400, `fue ${zero.status}`);
+
+  const negative = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: -5 } });
+  check('amount negativo -> 400', negative.status === 400, `fue ${negative.status}`);
+
+  // La columna es Decimal(12,2): un cuarto decimal no se puede representar y
+  // truncarlo en silencio seria peor que rechazarlo.
+  const threeDecimals = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 10000.125 } });
+  check('amount con 3 decimales -> 400', threeDecimals.status === 400, `fue ${threeDecimals.status}`);
+
+  const noSuch = await req('POST', '/auctions/00000000-0000-0000-0000-000000000000/bids', { token: b1.token, body: { amount: 10000 } });
+  check('subasta inexistente -> 404', noSuch.status === 404, `fue ${noSuch.status}`);
+
+  const own = await req('POST', `/auctions/${live.auctionId}/bids`, { token: sellerToken, body: { amount: 10000 } });
+  check('el vendedor puja en su subasta -> 403', own.status === 403, `fue ${own.status}`);
+}
+
+section('POST /api/auctions/:id/bids (minimo y primera puja)');
+{
+  const low = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 9999.99 } });
+  check('monto bajo el minimo -> 409', low.status === 409, `fue ${low.status}`);
+  check('  ...detalle.minimum = startingPrice', low.json?.error?.details?.minimum === 10000,
+    `llego ${low.json?.error?.details?.minimum}`);
+  check('  ...currentBid null todavia', low.json?.error?.details?.currentBid === null);
+
+  const first = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 10000 } });
+  check('primera puja exacta -> 201', first.status === 201, `fue ${first.status} ${JSON.stringify(first.json)}`);
+  check('  ...devuelve la puja', first.json?.data?.bid?.amount === 10000, `llego ${first.json?.data?.bid?.amount}`);
+  check('  ...y la subasta entera', first.json?.data?.auction?.id === live.auctionId);
+  check('  ...minimumNextBid = puja + incremento', first.json?.data?.minimumNextBid === 10250,
+    `llego ${first.json?.data?.minimumNextBid}`);
+
+  const after = (await req('GET', `/auctions/${live.auctionId}`)).json?.data;
+  check('  ...currentBid actualizado', after?.currentBid === 10000, `quedo ${after?.currentBid}`);
+  check('  ...currentWinner es el postor', after?.currentWinner?.id === b1.id);
+  check('  ...bidCount = 1', after?.bidCount === 1, `quedo ${after?.bidCount}`);
+  check('  ...aparece en recentBids', after?.recentBids?.[0]?.amount === 10000);
+  check('  ...el vehiculo sigue IN_AUCTION', after?.vehicle?.status === 'IN_AUCTION', `quedo ${after?.vehicle?.status}`);
+
+  // Pujar por encima de la propia puja no compra nada (no hay escrow) y un doble
+  // toque en la app es la forma natural de pagar dos veces por error.
+  const again = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 11000 } });
+  check('el ganador puja otra vez -> 409', again.status === 409, `fue ${again.status}`);
+  check('  ...con el mensaje del auto-sobreoferta', again.json?.error?.message === 'Ya sos el ganador actual de esta subasta',
+    `llego ${again.json?.error?.message}`);
+
+  const short = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b2.token, body: { amount: 10249.99 } });
+  check('medio centavo debajo del minimo -> 409', short.status === 409, `fue ${short.status}`);
+  check('  ...el minimo se respeta al centavo', short.json?.error?.details?.minimum === 10250,
+    `llego ${short.json?.error?.details?.minimum}`);
+
+  const second = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b2.token, body: { amount: 10250 } });
+  check('sobreoferta valida -> 201', second.status === 201, `fue ${second.status}`);
+  check('  ...currentWinner cambia', second.json?.data?.auction?.currentWinner?.id === b2.id);
+  check('  ...bidCount = 2', second.json?.data?.auction?.bidCount === 2, `quedo ${second.json?.data?.auction?.bidCount}`);
+
+  // Centavos exactos: si la aritmetica fuera con float, 10500.55 podria
+  // guardarse como 10500.549999 y el minio siguiente quedaria corrido.
+  const third = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b3.token, body: { amount: 10500.55 } });
+  check('tercera puja con centavos -> 201', third.status === 201, `fue ${third.status}`);
+  check('  ...se guarda exacta, sin error de coma flotante', third.json?.data?.bid?.amount === 10500.55,
+    `llego ${third.json?.data?.bid?.amount}`);
+  check('  ...currentId exacto', third.json?.data?.auction?.currentBid === 10500.55,
+    `llego ${third.json?.data?.auction?.currentBid}`);
+  check('  ...minimumNextBid exacto', third.json?.data?.minimumNextBid === 10750.55,
+    `llego ${third.json?.data?.minimumNextBid}`);
+
+  // El minimo que anuncia un 409 y el que devuelve una puja aceptada tienen que
+  // salir de la misma cuenta. Antes uno se computaba en centavos y el otro en
+  // unidades, asi que el primero era 100 veces el segundo.
+  const cross = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b2.token, body: { amount: 1 } });
+  check('el minimo del 409 coincide con el minimumNextBid de la puja anterior',
+    cross.json?.error?.details?.minimum === third.json?.data?.minimumNextBid,
+    `${cross.json?.error?.details?.minimum} vs ${third.json?.data?.minimumNextBid}`);
+}
+
+section('POST /api/auctions/:id/bids (concurrencia)');
+{
+  // El caso que motiva el SELECT ... FOR UPDATE: sin bloqueo, tres pujas al
+  // mismo monto leen la misma currentBid, las tres pasan el minimo y las tres
+  // escriben, dejando el contador desfasado del maximo real.
+  const race = await mkAuction('RACE', { startingPrice: 5000, minBidIncrement: 100 });
+  check('subasta de carrera creada', race.auctionId !== '');
+
+  const attempts = await Promise.all(bidders.map((b) => req('POST', `/auctions/${race.auctionId}/bids`, {
+    token: b.token, body: { amount: 5000 },
+  })));
+
+  const winners = attempts.filter((r) => r.status === 201);
+  const losers = attempts.filter((r) => r.status === 409);
+  check('exactamente 1 de 3 pujas simultaneas gana', winners.length === 1,
+    `ganaron ${winners.length} (${attempts.map((r) => r.status).join(',')})`);
+  check('  ...las otras dos reciben 409', losers.length === 2, `perdieron ${losers.length}`);
+  check('  ...ninguna recibe 500', !attempts.some((r) => r.status >= 500),
+    `llego ${attempts.map((r) => r.status).join(',')}`);
+  check('  ...el 409 reporta el minimo ya actualizado', losers.every((r) => r.json?.error?.details?.minimum === 5100),
+    `llego ${losers.map((r) => r.json?.error?.details?.minimum).join(',')}`);
+
+  const after = (await req('GET', `/auctions/${race.auctionId}`)).json?.data;
+  check('  ...Queda una sola puja guardada', after?.bidCount === 1, `quedaron ${after?.bidCount}`);
+  check('  ...currentBid es el monto ofertado', after?.currentBid === 5000, `quedo ${after?.currentBid}`);
+  check('  ...currentWinner coincide con el unico 201',
+    after?.currentWinner?.id === winners[0]?.json?.data?.bid?.bidder?.id);
+  check('  ...el vehiculo no quedo SOLD antes de tiempo', after?.vehicle?.status === 'IN_AUCTION',
+    `quedo ${after?.vehicle?.status}`);
+}
+
+section('GET /api/auctions/:id/bids');
+{
+  const all = await req('GET', `/auctions/${live.auctionId}/bids`);
+  check('historial publico -> 200', all.status === 200, `fue ${all.status}`);
+  check('  ...total = bidCount de la subasta', all.json?.meta?.total === 3, `llego ${all.json?.meta?.total}`);
+  check('  ...de la mas nueva a la mas vieja', all.json?.data?.[0]?.amount === 10500.55,
+    `primera ${all.json?.data?.[0]?.amount}`);
+  check('  ...y la mas vieja al final', all.json?.data?.[2]?.amount === 10000, `ultima ${all.json?.data?.[2]?.amount}`);
+  check('  ...con el nombre del postor', typeof all.json?.data?.[0]?.bidder?.fullName === 'string');
+
+  const paged = await req('GET', `/auctions/${live.auctionId}/bids?page=1&pageSize=2`);
+  check('  ...paginado devuelve pageSize', paged.json?.meta?.pageSize === 2, `llego ${paged.json?.meta?.pageSize}`);
+  check('  ...totalPages calculado', paged.json?.meta?.totalPages === 2, `llego ${paged.json?.meta?.totalPages}`);
+  check('  ...solo 2 filas', paged.json?.data?.length === 2, `llegaron ${paged.json?.data?.length}`);
+
+  const page2 = await req('GET', `/auctions/${live.auctionId}/bids?page=2&pageSize=2`);
+  check('  ...la pagina 2 trae el resto', page2.json?.data?.length === 1, `llegaron ${page2.json?.data?.length}`);
+
+  const bad = await req('GET', `/auctions/${live.auctionId}/bids?pageSize=0`);
+  check('pageSize 0 -> 400', bad.status === 400, `fue ${bad.status}`);
+
+  const noSuch = await req('GET', '/auctions/00000000-0000-0000-0000-000000000000/bids');
+  check('subasta inexistente -> 404', noSuch.status === 404, `fue ${noSuch.status}`);
+}
+
+section('GET /api/bids/mine');
+{
+  const noAuth = await req('GET', '/bids/mine');
+  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
+
+  const mine = await req('GET', '/bids/mine', { token: b1.token });
+  check('mis pujas -> 200', mine.status === 200, `fue ${mine.status}`);
+  check('  ...solo trae pujas propias', (mine.json?.data ?? []).every((b) => b.bidder?.id === b1.id));
+  const onLive = (mine.json?.data ?? []).filter((b) => b.auction?.id === live.auctionId);
+  check('  ...1 puja en la subasta LIVE', onLive.length === 1, `llegaron ${onLive.length}`);
+  check('  ...con el monto correcto', onLive[0]?.amount === 10000, `llego ${onLive[0]?.amount}`);
+  check('  ...y el contexto de la subasta', onLive[0]?.auction?.currentBid === 10500.55,
+    `llego ${onLive[0]?.auction?.currentBid}`);
+  check('  ...el desplazado sigue viendo su puja', onLive[0]?.amount !== onLive[0]?.auction?.currentBid);
+
+  const other = await req('GET', '/bids/mine', { token: b2.token });
+  const otherOnLive = (other.json?.data ?? []).filter((b) => b.auction?.id === live.auctionId);
+  check('otro usuario ve la suya, no la ajena', otherOnLive.length === 1 && otherOnLive[0]?.amount === 10250,
+    `llego ${otherOnLive.map((b) => b.amount).join(',')}`);
+  check('  ...no se puede pedir el de otro', !(other.json?.data ?? []).some((b) => b.bidder?.id === b1.id));
+}
+
+section('Ciclo de vida automatico de la subasta (PENDING -> ACTIVE)');
+{
+  const pending = await mkAuction('PEND', { startingPrice: 8000, startInMs: 1200, endInMs: 300000 });
+  check('subasta futura queda PENDING', pending.status === 'PENDING', `quedo ${pending.status}`);
+
+  const early = await req('POST', `/auctions/${pending.auctionId}/bids`, { token: b1.token, body: { amount: 8000 } });
+  check('pujar antes de que arranque -> 409', early.status === 409, `fue ${early.status}`);
+  check('  ...mensaje de "todavia no empezo"', early.json?.error?.message === 'La subasta todavia no empezo',
+    `llego ${early.json?.error?.message}`);
+
+  const forbidden = await req('POST', '/auctions/lifecycle', { token: regToken });
+  check('disparar el ciclo de vida como BUYER -> 403', forbidden.status === 403, `fue ${forbidden.status}`);
+
+  await sleep(1600);
+  const run = await req('POST', '/auctions/lifecycle', { token: adminToken });
+  check('como ADMIN -> 200', run.status === 200, `fue ${run.status}`);
+  check('  ...reporta las activadas', typeof run.json?.data?.activated === 'number',
+    `llego ${JSON.stringify(run.json?.data?.activated)}`);
+  check('  ...y las cerradas en un array', Array.isArray(run.json?.data?.closed));
+
+  const now = (await req('GET', `/auctions/${pending.auctionId}`)).json?.data;
+  check('la subasta PENDING paso a ACTIVE sola', now?.status === 'ACTIVE', `quedo ${now?.status}`);
+
+  // La prueba de que activar no es cosmético: ahora la puja entra.
+  const ok = await req('POST', `/auctions/${pending.auctionId}/bids`, { token: b1.token, body: { amount: 8000 } });
+  check('  ...y ya se puede pujar', ok.status === 201, `fue ${ok.status} ${JSON.stringify(ok.json)}`);
+}
+
+section('Cierre automatico (ACTIVE -> FINISHED)');
+{
+  const closing = await mkAuction('CLOSE', { startingPrice: 7000, minBidIncrement: 100, endInMs: 2500 });
+  check('subasta corta creada y activa', closing.status === 'ACTIVE', `quedo ${closing.status}`);
+
+  const bid = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b2.token, body: { amount: 7000 } });
+  check('puja antes de vencer -> 201', bid.status === 201, `fue ${bid.status}`);
+
+  await sleep(2800);
+  const run = await req('POST', '/auctions/lifecycle', { token: adminToken });
+  check('el ciclo de vida responde con la forma esperada',
+    typeof run.json?.data?.activated === 'number' && Array.isArray(run.json?.data?.closed),
+    `llego ${JSON.stringify(run.json?.data)}`);
+
+  // El cierre puede haberlo hecho esta llamada o el timer, segun en que momento
+  // corra cada uno: lo que importa es que la subasta termine cerrada sola.
+  const after = await waitFor(async () => {
+    const r = await req('GET', `/auctions/${closing.auctionId}`);
+    return r.json?.data?.status === 'FINISHED' ? r.json.data : null;
+  });
+  check('la subasta vencida termina FINISHED sola', Boolean(after), 'no llego a FINISHED en 20s');
+  check('  ...con el ganador fijado', after?.currentWinner?.id === b2.id, `llego ${after?.currentWinner?.id}`);
+  check('  ...y su puja mas alta', after?.currentBid === 7000, `llego ${after?.currentBid}`);
+  check('  ...el vehiculo quedo SOLD', after?.vehicle?.status === 'SOLD', `quedo ${after?.vehicle?.status}`);
+
+  const late = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b1.token, body: { amount: 9000 } });
+  check('pujar en una subasta cerrada -> 409', late.status === 409, `fue ${late.status}`);
+  check('  ...mensaje de "ya termino"', late.json?.error?.message === 'La subasta ya termino',
+    `llego ${late.json?.error?.message}`);
+
+  const cancel = await req('DELETE', `/auctions/${closing.auctionId}`, { token: sellerToken });
+  check('cancelar una subasta finalizada -> 409', cancel.status === 409, `fue ${cancel.status}`);
+
+  const again = await req('POST', '/auctions/lifecycle', { token: adminToken });
+  check('el ciclo de vida es idempotente', !(again.json?.data?.closed ?? []).some((c) => c.auctionId === closing.auctionId),
+    `llego ${JSON.stringify(again.json?.data?.closed)}`);
+}
+
+section('Cierre sin pujas: el vehiculo vuelve al catalogo');
+{
+  const empty = await mkAuction('EMPTY', { startingPrice: 6000, endInMs: 2000 });
+  await sleep(2300);
+  await req('POST', '/auctions/lifecycle', { token: adminToken });
+
+  const after = (await req('GET', `/auctions/${empty.auctionId}`)).json?.data;
+  check('la subasta sin pujas queda FINISHED', after?.status === 'FINISHED', `quedo ${after?.status}`);
+  check('  ...sin ganador', after?.currentWinner === null, `llego ${JSON.stringify(after?.currentWinner)}`);
+  check('  ...y sin puja vigente', after?.currentBid === null, `llego ${after?.currentBid}`);
+  // Sin pujas no hay venta: dejarlo IN_AUCTION lo escondia del catalogo para
+  // siempre, sin Nadie que pudiera comprarlo ni pujar.
+  check('  ...el vehiculo vuelve a AVAILABLE', after?.vehicle?.status === 'AVAILABLE',
+    `quedo ${after?.vehicle?.status}`);
+}
+
+section('Pujas en vivo por socket');
+{
+  const { io } = await import('socket.io-client');
+
+  // El ganador actual escucha: recibe el evento de sala Y el aviso de que lo
+  // desplazaron, que va a su sala personal y no a la de la subasta.
+  const watcher = await new Promise((resolve) => {
+    const socket = io(BASE.replace('/api', ''), {
+      transports: ['websocket'], auth: { token: b3.token }, reconnection: false, timeout: 5000,
+    });
+    const received = { bidPlaced: null, outbid: null, errors: [] };
+    socket.on('connection:error', (e) => received.errors.push(e));
+    socket.on('auction:bid-placed', (payload) => { received.bidPlaced = payload; });
+    socket.on('auction:outbid', (payload) => { received.outbid = payload; });
+    socket.on('connection:ready', () => {
+      // La sala valida contra la base: sin esto, un uuid inexistente entraba igual.
+      socket.emit('auction:join', { auctionId: '00000000-0000-0000-0000-000000000000' });
+      setTimeout(() => {
+        socket.emit('auction:join', { auctionId: live.auctionId });
+        setTimeout(() => resolve({ socket, received }), 300);
+      }, 300);
+    });
+    setTimeout(() => resolve({ socket, received }), 6000);
+  });
+
+  const push = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b2.token, body: { amount: 10750.55 } });
+  check('la puja que se emite por HTTP -> 201', push.status === 201, `fue ${push.status}`);
+  await sleep(500);
+
+  check('quien esta en la sala recibe auction:bid-placed', Boolean(watcher.received.bidPlaced),
+    JSON.stringify(watcher.received));
+  check('  ...con el monto de la puja', watcher.received.bidPlaced?.currentBid === 10750.55,
+    `llego ${watcher.received.bidPlaced?.currentBid}`);
+  check('  ...el contador actualizado', watcher.received.bidPlaced?.bidCount === 4,
+    `llego ${watcher.received.bidPlaced?.bidCount}`);
+  check('  ...el minimo siguiente ya calculado', watcher.received.bidPlaced?.minimumNextBid === 11000.55,
+    `llego ${watcher.received.bidPlaced?.minimumNextBid}`);
+  check('  ...y el nuevo ganador', watcher.received.bidPlaced?.currentWinner?.id === b2.id);
+  check('el desplazado recibe auction:outbid', Boolean(watcher.received.outbid),
+    JSON.stringify(watcher.received.outbid));
+  check('  ...con el minimo para reintentar', watcher.received.outbid?.minimumNextBid === 11000.55,
+    `llego ${watcher.received.outbid?.minimumNextBid}`);
+  check('entrar a la sala de una subasta inexistente -> error', watcher.received.errors.some((e) => e.code === 'NOT_FOUND'),
+    JSON.stringify(watcher.received.errors));
+
+  watcher.socket.close();
+  await sleep(100);
 }
 
 // ---------------------------------------------------------------------------

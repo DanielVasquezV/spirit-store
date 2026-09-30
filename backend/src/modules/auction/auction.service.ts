@@ -1,14 +1,14 @@
 import { prisma } from '../../lib/prisma.js';
 import { AppError } from '../../middleware/error-handler.js';
+import { lockAuctionRow } from './auction.state.js';
 import { toVehicleDto, VEHICLE_INCLUDE } from '../vehicle/vehicle.service.js';
 import type { Requester, VehicleDto } from '../vehicle/vehicle.service.js';
 import type { AuctionStatus, Prisma } from '../../generated/prisma/client.js';
 
-// Las pujas se leen aca (la app muestra "participantes recientes"), pero no se
-// escriben: el alta de pujas y el push en vivo son el servicio de subastas con
-// socket, que todavia no existe. Este modulo solo cubre el ciclo de vida de la
-// subasta: programar, consultar, editar y cancelar.
-const AUCTION_INCLUDE = {
+// Las pujas se leen aca (la app muestra "participantes recientes") y se escriben
+// en el modulo de pujas (`bid.service.ts`), que bloquea esta misma fila para
+// que dos pujas simultaneas no se pisen.
+export const AUCTION_INCLUDE = {
   vehicle: { include: VEHICLE_INCLUDE },
   seller: { select: { id: true, fullName: true } },
   currentWinner: { select: { id: true, fullName: true } },
@@ -235,7 +235,19 @@ export async function cancelAuction(id: string, requester: Requester): Promise<v
 
   // Cancelar devuelve el vehiculo al catalogo en vez de dejarlo en IN_AUCTION
   // para siempre. Si ya se vendio (SOLD) no se toca.
+  //
+  // Comparte el bloqueo de fila con el alta de pujas: sin el, cancelar mientras
+  // hay una puja en vuelo deja la subasta CANCELLED con una puja aceptada
+  // despues (si cancela primero) o una puja perdida en una subasta activa.
   await prisma.$transaction(async (tx) => {
+    await lockAuctionRow(tx, id);
+    const fresh = await tx.auction.findUnique({ where: { id }, select: { status: true } });
+    // Pudo terminar entre la lectura de arriba y el lock.
+    if (!fresh || fresh.status === 'FINISHED') {
+      throw AppError.conflict('Una subasta finalizada no se puede cancelar');
+    }
+    if (fresh.status === 'CANCELLED') return;
+
     await tx.auction.update({ where: { id }, data: { status: 'CANCELLED' } });
     await tx.vehicle.updateMany({
       where: { id: current.vehicleId, status: 'IN_AUCTION' },

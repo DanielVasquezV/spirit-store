@@ -13,6 +13,7 @@ import {
 } from '../../lib/validate.js';
 import { AuctionStatus } from '../../generated/prisma/client.js';
 import * as auctionService from './auction.service.js';
+import { runAuctionLifecycle } from './auction.state.js';
 import type { AuctionFilters } from './auction.service.js';
 
 const ALLOWED_STATUS = Object.values(AuctionStatus);
@@ -129,4 +130,15 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await auctionService.cancelAuction(requireUuid(String(req.params.id)), requester(req));
   noContent(res);
+});
+
+/**
+ * Dispara a mano el ciclo de vida. El servidor lo corre solo cada 15s, asi que
+ * esto solo hace falta de forma operacional (despues de una caida larga, o para
+ * no esperar al tick en una prueba). Es la misma funcion que usa el timer, no un
+ * camino alterno con reglas propias.
+ */
+export const runLifecycle = asyncHandler(async (_req: Request, res: Response) => {
+  const result = await runAuctionLifecycle();
+  ok(res, result);
 });

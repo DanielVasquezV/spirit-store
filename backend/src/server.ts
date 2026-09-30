@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
+import { startAuctionLifecycleScheduler } from './modules/auction/auction.state.js';
 import { initSocketServer } from './socket/index.js';
 import type { SocketServer } from './socket/index.js';
 
@@ -48,6 +49,12 @@ export async function startServer(): Promise<RunningServer> {
   // Un solo servidor HTTP para REST y WebSockets.
   const sockets = initSocketServer(httpServer);
 
+  // Sin esto el estado de una subasta solo avanzaria cuando alguien la mirara, y
+  // como nadie mira una subasta que ya vencio, quedaria ACTIVE para siempre sin
+  // ganador. Corre un tick apenas arranca para recuperar lo que se perdio con el
+  // servidor caido.
+  const lifecycle = startAuctionLifecycleScheduler();
+
   const port = await listen(httpServer, env.port);
 
   // Tope por IP: frena la puja automatizada desde muchas cuentas sobre la misma
@@ -68,6 +75,7 @@ export async function startServer(): Promise<RunningServer> {
       // Primero los sockets: con un cliente conectado, close() del servidor HTTP
       // esperaría indefinidamente.
       await sockets.close();
+      lifecycle.stop();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });

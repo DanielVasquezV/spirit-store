@@ -393,7 +393,7 @@ export const errorSchemas = {
   AuctionStatus: {
     type: 'string',
     enum: ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED'],
-    description: '`PENDING` es programada (empieza en el futuro); `ACTIVE` es la que la app muestra como "En vivo".',
+    description: '`PENDING` es programada (empieza en el futuro); `ACTIVE` es la que la app muestra como "En vivo". `FINISHED` la cierra el timer cuando vence `endTime`, fijando el ganador; `CANCELLED` la marca el vendedor o un ADMIN. Las transiciones las hace el servidor, no el cliente.',
     example: 'ACTIVE',
   },
 
@@ -548,12 +548,98 @@ export const errorSchemas = {
   Bid: {
     type: 'object',
     required: ['id', 'amount', 'createdAt', 'bidder'],
-    description: 'Lectura del historial de pujas. La API todavía no expone un endpoint para **crear** pujas: eso llega con el servicio de subastas por socket.',
+    description: 'Una puja registrada. Solo el postor puede ver el historial de sus propias pujas; el de una subasta es público.',
     properties: {
       id: { type: 'string', format: 'uuid' },
       amount: { type: 'number' },
       createdAt: { type: 'string', format: 'date-time' },
       bidder: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+    },
+  },
+
+  CreateBidRequest: {
+    type: 'object',
+    required: ['amount'],
+    description: [
+      'Pujar en una subasta.',
+      '',
+      'El monto se compara en centavos enteros, asi que admite como maximo dos',
+      'decimales y un envio con mas se rechaza con `400`.',
+      '',
+      'La puja minima es `startingPrice` si la subasta no tiene pujas, y',
+      '`currentBid + minBidIncrement` si ya tiene. El `409` la devuelve en',
+      '`details.minimum`, ya redondeada, para que la app pueda pintar el minimo sin',
+      'calcularlo y arriesgarse a mostrar un centavo menos.',
+    ].join('\n'),
+    properties: {
+      amount: { type: 'number', example: 120500, description: 'Monto ofertado, en la misma moneda que `startingPrice`.' },
+    },
+  },
+
+  BidPlacement: {
+    type: 'object',
+    required: ['bid', 'auction', 'minimumNextBid'],
+    description: [
+      'Respuesta del alta de pujas. Devuelve la subasta entera ademas de la puja',
+      'para que la app actualice contador, ganador y minimo siguiente con una sola',
+      'respuesta, sin tener que volver a pedir `GET /auctions/{id}`.',
+    ].join('\n'),
+    properties: {
+      bid: { $ref: '#/components/schemas/Bid' },
+      auction: { $ref: '#/components/schemas/Auction' },
+      minimumNextBid: { type: 'number', description: 'Puja minima para el siguiente postor.' },
+    },
+  },
+
+  MyBid: {
+    type: 'object',
+    required: ['id', 'amount', 'createdAt', 'bidder', 'auction'],
+    description: 'Una puja propia con el contexto minimo de la subasta en la que se hizo, para pintar la lista sin un request por fila.',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      amount: { type: 'number' },
+      createdAt: { type: 'string', format: 'date-time' },
+      bidder: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+      auction: {
+        type: 'object',
+        required: ['id', 'vehicleId', 'status', 'endTime', 'currentBid'],
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          vehicleId: { type: 'string', format: 'uuid' },
+          status: { $ref: '#/components/schemas/AuctionStatus' },
+          endTime: { type: 'string', format: 'date-time' },
+          currentBid: { type: 'number', nullable: true },
+        },
+      },
+    },
+  },
+
+  LifecycleResult: {
+    type: 'object',
+    required: ['activated', 'closed'],
+    description: [
+      'Resultado de una corrida del ciclo de vida de subastas.',
+      '',
+      'El servidor lo corre solo cada 15 segundos; este endpoint solo existe para',
+      'dispararlo a mano (tras una caida larga, o para no esperar al tick).',
+    ].join('\n'),
+    properties: {
+      activated: { type: 'integer', description: 'Subastas que pasaron de `PENDING` a `ACTIVE` porque ya habia arrancado.', example: 1 },
+      closed: {
+        type: 'array',
+        description: 'Subastas que se cerraron en esta corrida, con su ganador.',
+        items: {
+          type: 'object',
+          required: ['auctionId', 'vehicleId', 'status', 'winnerId', 'currentBid'],
+          properties: {
+            auctionId: { type: 'string', format: 'uuid' },
+            vehicleId: { type: 'string', format: 'uuid' },
+            status: { $ref: '#/components/schemas/AuctionStatus' },
+            winnerId: { type: 'string', format: 'uuid', nullable: true, description: 'Null si la subasta termino sin pujas: el vehiculo vuelve al catalogo.' },
+            currentBid: { type: 'number', nullable: true },
+          },
+        },
+      },
     },
   },
 

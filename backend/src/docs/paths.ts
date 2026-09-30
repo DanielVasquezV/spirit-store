@@ -703,6 +703,123 @@ export const paths = {
       },
     },
   },
+
+  '/api/auctions/lifecycle': {
+    post: {
+      tags: ['Subastas'],
+      summary: 'Disparar el cierre de subastas vencidas',
+      description: [
+        'Solo ADMIN. El servidor corre el ciclo de vida solo cada 15 segundos, asi',
+        'que esto casi nunca hace falta: es para recuperacion operacional (tras una',
+        'caida larga) o para no esperar al proximo tick.',
+        '',
+        'Activa las subastas `PENDING` cuya `startTime` ya paso y cierra las',
+        '`ACTIVE` cuya `endTime` ya vencio. Un cierre con pujas deja el vehiculo',
+        '`SOLD` y fija el ganador; **sin pujas** el vehiculo vuelve a `AVAILABLE` en',
+        'vez de quedar colgado en `IN_AUCTION`.',
+        '',
+        'Es idempotente: correrla dos veces no cambia el resultado ni cierra dos',
+        'veces la misma subasta.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: successEnvelope('#/components/schemas/LifecycleResult', 'Corrida terminada.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'Insufficient permissions'),
+      },
+    },
+  },
+
+  '/api/auctions/{id}/bids': {
+    get: {
+      tags: ['Subastas'],
+      summary: 'Historial de pujas de una subasta',
+      description: 'Público, de la más nueva a la más vieja. El detalle de la subasta solo trae las últimas 10; acá está el historial completo.',
+      security: [],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/Bid', 'Página de pujas.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        404: errorResponse('NOT_FOUND', 'Auction not found'),
+      },
+    },
+    post: {
+      tags: ['Subastas'],
+      summary: 'Pujar',
+      description: [
+        'Registra la puja y devuelve la subasta ya actualizada, para no pedir',
+        '`GET /auctions/{id}` justo después.',
+        '',
+        '**Cómo se valida el monto.** La puja mínima es `startingPrice` si la',
+        'subasta no tiene pujas, y `currentBid + minBidIncrement` si ya tiene. La',
+        'comparación se hace en **centavos enteros**, no con los `Decimal` de la',
+        'base: el monto llega del cliente como float y `0.1 + 0.2 != 0.3` en',
+        'IEEE-754. Por eso `amount` admite como máximo dos decimales.',
+        '',
+        '**Concurrencia.** El monto se valida y se escribe dentro de una transacción',
+        'que bloquea la fila de la subasta (`SELECT ... FOR UPDATE`). Dos pujas',
+        'simultáneas quedan serializadas: la segunda ve el `currentBid` que acaba',
+        'de escribir la primera, así que solo una puede ganar por el mismo monto y',
+        '`currentBid` nunca divergen del máximo real.',
+        '',
+        '**No se puede** pujar en una subasta propia (403), ni sobre la propia puja',
+        'actual (409: no hay escrow, así que no compra nada y un doble toque en la app',
+        'pagaría dos veces por error), ni en una subasta que no está `ACTIVE`.',
+        '',
+        'La puja no pasa por el socket: el evento `auction:bid-placed` se **emite**',
+        'desde acá, después del commit. Si el commit falla, el evento nunca se',
+        'emite y el cliente nunca ve una puja que se cayó.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateBidRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/BidPlacement', 'Puja registrada.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        403: errorResponse('FORBIDDEN', 'No podes pujar en tu propia subasta'),
+        404: errorResponse('NOT_FOUND', 'Auction not found'),
+        409: errorResponse(
+          'CONFLICT',
+          'La puja no alcanza el minimo',
+          { minimum: 120010, currentBid: 120000, minBidIncrement: 10 },
+        ),
+      },
+    },
+  },
+
+  '/api/bids/mine': {
+    get: {
+      tags: ['Subastas'],
+      summary: 'Mis pujas',
+      description: [
+        'Pujas del usuario del token, de la más nueva a la más vieja, con el',
+        'contexto de cada subasta. El postor se toma del token y no de un parámetro:',
+        'el endpoint no acepta un `bidderId`, así que no hay forma de pedir las',
+        'pujas de otro.',
+        '',
+        'Incluye pujas que ya quedaron desplazadas: el `currentBid` de la subasta',
+        'difiere de `amount` cuando otro postor pujó más alto.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/MyBid', 'Página de pujas propias.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+  },
 } as const;
 
 export { errorSchemas, securitySchemes };

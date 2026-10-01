@@ -9,9 +9,11 @@
  * aserciones sobre fetch, asi que corre en cualquier Node >= 18 sin instalar
  * nada extra. Sale con codigo 1 si algo falla, para poder engancharlo a CI.
  *
- * Los tests que dependen de Cloudinary se saltan (y lo dicen) cuando
- * CLOUDINARY_URL esta vacio: es preferible un "SKIP" visible a un falso verde.
- * Para correrlos: CLOUDINARY_URL=cloudinary://key:secret@cloud ponelo en ../.env
+ * Los tests que dependen de un servicio externo se saltan (y lo dicen) cuando
+ * falta la credencial: es preferible un "SKIP" visible a un falso verde. Los
+ * motivos se listan al final para no tener que buscarlos en la salida.
+ *   - Cloudinary (subida/firma/borrado): requiere CLOUDINARY_URL.
+ *   - Veredicto de la IA: requiere GEMINI_API_KEY y cuota disponible.
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -40,6 +42,10 @@ const CLOUDINARY_SECRET_FROM_URL = (() => {
 let pass = 0;
 let fail = 0;
 let skip = 0;
+// Motivo de cada `skipTest`, para que el resumen diga POR QUE se salto cada uno.
+// Sin esto el cierre imprimia siempre "falta CLOUDINARY_URL" y eso era falso
+// cuando lo omitido era la IA: el mismo "1 omitido" con dos causas distintas.
+const skipReasons = [];
 const created = [];
 
 function check(name, cond, extra = '') {
@@ -49,6 +55,7 @@ function check(name, cond, extra = '') {
 
 function skipTest(name, why) {
   skip += 1;
+  skipReasons.push([why]);
   console.log(`  skip   ${name}  (${why})`);
 }
 
@@ -1915,8 +1922,24 @@ console.log(`\n${'='.repeat(52)}`);
 console.log(`  ${pass} ok  |  ${fail} fallas  |  ${skip} omitidos`);
 console.log(`  base: ${BASE}`);
 if (skip > 0) {
-  console.log('  Omitidos por falta de CLOUDINARY_URL: ponela en ../.env y');
-  console.log('  reinicia el servidor para ejercitar subida/firma/borrado reales.');
+  // El motivo importa: sin esto el resumen dice "omitido" sin decir por que, y
+  // se lee como un test que no se pudo escribir en vez de uno que dependia de
+  // una credencial o de un proveedor. Ademas cada causa tiene un arreglo
+  // distinto, asi que el hint tiene que nombrarla.
+  const reasons = new Map();
+  for (const [reason] of skipReasons) reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
+
+  console.log('  Motivos de los omitidos:');
+  for (const [reason, n] of reasons) console.log(`    ${n}x  ${reason}`);
+
+  const hasReason = (needle) => [...reasons.keys()].some((r) => r.includes(needle));
+  if (hasReason('CLOUDINARY_URL')) {
+    console.log('    Para correrlos: CLOUDINARY_URL=cloudinary://key:secret@cloud en ../.env');
+  }
+  if (hasReason('GEMINI_API_KEY') || hasReason('la creacion fallo')) {
+    console.log('    Para correrlos: GEMINI_API_KEY valida en ../.env, contra un server');
+    console.log('    arrancado despues de cargarla (SMOKE_BASE_URL=http://localhost:PUERTO/api).');
+  }
 }
 console.log(`${'='.repeat(52)}\n`);
 

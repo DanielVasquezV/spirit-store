@@ -65,6 +65,9 @@ export const SOCKET_EVENTS = {
     // un canal fantasma esperando en el cliente.
     done: 'diagnostic:done',
   },
+  order: {
+    paid: 'order:paid',
+  },
 } as const;
 
 // El usuario entra a la suya al conectar; las de recurso, bajo demanda, para no

@@ -1,23 +1,29 @@
 import { router } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Logo } from '@/components/logo';
+import { useSession } from '@/features/auth/session-provider';
 import { Colors, Radius, Spacing, Type } from '@/constants/theme';
 
 const SPLASH_DURATION = 2000;
 
 export default function SplashScreen() {
+  const { status } = useSession();
   const progress = useSharedValue(0);
+  const [minElapsed, setMinElapsed] = useState(false);
 
   useEffect(() => {
     progress.value = withTiming(1, { duration: SPLASH_DURATION, easing: Easing.inOut(Easing.quad) });
-    // Timer único: la limpieza del efecto evita navegar dos veces.
-    const timer = setTimeout(() => {
-      router.replace('/(tabs)');
-    }, SPLASH_DURATION + 250);
+    // Tiempo mínimo de marca: aunque la sesión resuelva al instante, el splash no parpadea.
+    const timer = setTimeout(() => setMinElapsed(true), SPLASH_DURATION);
     return () => clearTimeout(timer);
   }, [progress]);
+
+  useEffect(() => {
+    if (!minElapsed || status === 'loading') return;
+    router.replace(status === 'authenticated' ? '/(tabs)' : '/login');
+  }, [minElapsed, status]);
 
   // scaleX con transformOrigin en left: el relleno crece de izquierda a derecha.
   const barStyle = useAnimatedStyle(() => ({
@@ -35,7 +41,7 @@ export default function SplashScreen() {
         <View style={styles.track}>
           <Animated.View style={[styles.fill, barStyle]} />
         </View>
-        <Text style={styles.loaderLabel}>Cargando</Text>
+        <Text style={styles.loaderLabel}>{status === 'loading' ? 'Cargando' : 'Listo'}</Text>
       </View>
     </View>
   );

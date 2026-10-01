@@ -1,44 +1,48 @@
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { Redirect, router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { StickyCta } from '@/components/ui/sticky-cta';
+import { useSession } from '@/features/auth/session-provider';
+import { fieldErrors, messageFor } from '@/lib/api/api-error';
+import { hasErrors, validateRegister, type FieldErrors } from '@/lib/validation';
 import { Colors, Layout, Spacing, Type } from '@/constants/theme';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const PHONE_RE = /^[+\d][\d\s-]{6,}$/;
-
-type Errors = { fullName?: string; email?: string; phone?: string; password?: string; confirm?: string };
-
 export default function RegisterScreen() {
+  const { status, signUp } = useSession();
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [errors, setErrors] = useState<Errors>({});
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const validate = (): boolean => {
-    const next: Errors = {};
-    if (fullName.trim().length < 3) next.fullName = 'Ingresá tu nombre completo';
-    if (!EMAIL_RE.test(email)) next.email = 'Ingresá un correo electrónico válido';
-    if (!PHONE_RE.test(phone)) next.phone = 'Ingresá un número de teléfono válido';
-    if (password.length < 8) next.password = 'La contraseña debe tener al menos 8 caracteres';
-    if (confirm !== password) next.confirm = 'Las contraseñas no coinciden';
-    setErrors(next);
-    return Object.keys(next).length === 0;
+  useEffect(() => {
+    if (status === 'authenticated') router.replace('/(tabs)');
+  }, [status]);
+
+  const handleSubmit = async () => {
+    const found = validateRegister({ fullName, email, phone, password, confirm });
+    setErrors(found);
+    if (hasErrors(found)) return;
+
+    setSubmitting(true);
+    setFormError(null);
+    try {
+      await signUp({ email: email.trim(), fullName: fullName.trim(), password, phoneNumber: phone.trim() });
+    } catch (error) {
+      setErrors((current) => ({ ...current, ...fieldErrors(error) }));
+      setFormError(messageFor(error, 'No pudimos crear la cuenta.'));
+      setSubmitting(false);
+    }
   };
 
-  const handleSubmit = () => {
-    if (!validate()) return;
-    setSubmitting(true);
-    // Mock del registro: aquí se enviarán full_name, email, phone y password al endpoint real.
-    setTimeout(() => router.replace('/(tabs)'), 700);
-  };
+  if (status === 'authenticated') return <Redirect href="/(tabs)" />;
 
   return (
     <SafeAreaView style={styles.screen} edges={['top']}>
@@ -95,7 +99,6 @@ export default function RegisterScreen() {
             onChangeText={setConfirm}
             placeholder="Repetí tu contraseña"
             secureTextEntry
-            autoCapitalize="none"
             autoComplete="password-new"
             error={errors.confirm}
           />
@@ -103,6 +106,8 @@ export default function RegisterScreen() {
             Cuando publiques un vehículo te pediremos el número VIN, la placa y tu documento DUI
             para verificar la venta.
           </Text>
+
+          {formError ? <Text style={styles.formError}>{formError}</Text> : null}
         </View>
 
         <View style={styles.switchRow}>
@@ -135,6 +140,7 @@ const styles = StyleSheet.create({
   lead: { ...Type.bodySm, color: Colors.textMuted },
   note: { ...Type.caption, color: Colors.textMuted },
   form: { gap: Spacing.lg },
+  formError: { ...Type.caption, color: Colors.danger },
   link: { ...Type.bodyStrong, color: Colors.text },
   switchRow: { flexDirection: 'row', gap: Spacing.xs + 2, justifyContent: 'center', alignItems: 'center' },
   switchText: { ...Type.caption, color: Colors.textMuted },

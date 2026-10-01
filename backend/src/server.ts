@@ -6,6 +6,7 @@ import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { startAuctionLifecycleScheduler } from './modules/auction/auction.state.js';
+import { startOrderExpiryScheduler } from './modules/order/order.expiry.js';
 import { initSocketServer } from './socket/index.js';
 import type { SocketServer } from './socket/index.js';
 
@@ -55,6 +56,10 @@ export async function startServer(): Promise<RunningServer> {
   // servidor caido.
   const lifecycle = startAuctionLifecycleScheduler();
 
+  // Sin esto una orden abandonada a mitad del checkout deja el vehiculo
+  // RESERVED para siempre, porque nadie mas va a cancelar esa orden.
+  const orderExpiry = startOrderExpiryScheduler();
+
   const port = await listen(httpServer, env.port);
 
   // Tope por IP: frena la puja automatizada desde muchas cuentas sobre la misma
@@ -76,6 +81,7 @@ export async function startServer(): Promise<RunningServer> {
       // esperaría indefinidamente.
       await sockets.close();
       lifecycle.stop();
+      orderExpiry.stop();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));
       });

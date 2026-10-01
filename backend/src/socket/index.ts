@@ -10,6 +10,7 @@ import { isUuid } from '../lib/validate.js';
 import { prisma } from '../lib/prisma.js';
 import { setAuctionRealtimeSink } from './realtime.js';
 import { setRealtimeSink } from './chat-realtime.js';
+import { setOrderRealtimeSink } from './order-realtime.js';
 import * as chatService from '../modules/chat/chat.service.js';
 import type { AuthTokenPayload } from '../lib/jwt.js';
 
@@ -106,6 +107,16 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
       // conectar, asi que no hace falta una sala por diagnostico. El
       // `diagnosticId` viaja en el payload para desambiguar.
       io.to(SOCKET_ROOMS.user(event.userId)).emit(SOCKET_EVENTS.diagnostic.done, event);
+    },
+  });
+
+  // El pago simulado avisa por las salas personales de comprador y vendedor.
+// No hay sala por orden: son los dos unicos interesados y ambos ya estan
+// unidos a su sala al conectar.
+  setOrderRealtimeSink({
+    orderPaid: (event) => {
+      io.to(SOCKET_ROOMS.user(event.buyerId)).emit(SOCKET_EVENTS.order.paid, event);
+      io.to(SOCKET_ROOMS.user(event.sellerId)).emit(SOCKET_EVENTS.order.paid, event);
     },
   });
 
@@ -216,7 +227,7 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
       const chatId = payload.chatId;
       if (typeof chatId !== 'string' || !isUuid(chatId)) return;
       // `markRead` ya emite `chat:read` a la sala cuando hay algo que marcar.
-      // Acá no se reemite al quepidio: lo veria dos veces.
+      // Acá no se reemite al que pidió: lo veria dos veces.
       void chatService
         .markRead(chatId, auth.sub)
         .catch(() => emitError(socket, ERROR_CODES.NOT_FOUND, 'Chat not found'));
@@ -234,6 +245,7 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
         // Desenganchar el sink antes de cerrar: si el servidor HTTP sigue vivo
         // un instante mas, una puja no debe colgarse en una instancia muerta.
         setAuctionRealtimeSink(null);
+        setOrderRealtimeSink(null);
         // Sin cerrar las conexiones activas el proceso no termina.
         io.close(() => resolve());
       }),

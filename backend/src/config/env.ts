@@ -31,6 +31,15 @@ function toInt(name: string, value: string | undefined, fallback: number): numbe
   return parsed;
 }
 
+function toNumber(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${name} must be a number, received "${value}".`);
+  }
+  return parsed;
+}
+
 // En producción la lista tiene que ser explícita: un `*` por un error de
 // despliegue abriría la API a todo internet.
 function parseClientUrls(raw: string): true | string[] {
@@ -87,4 +96,16 @@ export const env = {
   // contra la API desplegada desde el navegador.
   swaggerEnabled:
     (process.env.SWAGGER_ENABLED ?? '').toLowerCase() === 'true' || !isProduction,
+
+  orders: {
+    // Tasa de impuesto que se aplica al crear la orden. Es una constante del
+    // negocio (13% en El Salvador) y vive en env para poder cambiarla sin
+    // desplegar: el snapshot de cada orden guarda la tasa usada en su momento.
+    taxRate: toNumber('TAX_RATE', process.env.TAX_RATE, 0.13),
+    currency: process.env.DEFAULT_CURRENCY ?? 'USD',
+    // Minutos que una orden puede quedar PENDING_PAYMENT antes de liberarse.
+    // Sin esto, un vehiculo reservado se bloquea para siempre si el cliente
+    // abandona el checkout.
+    paymentExpiryMinutes: toInt('ORDER_EXPIRY_MINUTES', process.env.ORDER_EXPIRY_MINUTES, 30),
+  },
 } as const;

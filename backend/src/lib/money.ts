@@ -32,6 +32,15 @@ export function decimalString(cents: number): string {
 }
 
 /**
+ * Texto exacto para columnas `Decimal(5,4)` de tasas (IVA). No puede pasar por
+ * `decimalString`, que espera centavos: `toCents(0.13)` es 13 y escribiría
+ * "13.00" en una columna que significa 0,1300.
+ */
+export function rateString(rate: number): string {
+  return rate.toFixed(4);
+}
+
+/**
  * Si el monto tiene mas de dos decimales. Se tolera el error de coma flotante
  * (0.1 * 100 es 10.000000000000002) con un margen chico: 19.999 queda
  * afuera, que es justo lo que se quiere.

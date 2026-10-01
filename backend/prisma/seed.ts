@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
 import { PrismaPg } from '@prisma/adapter-pg';
+import bcrypt from 'bcrypt';
 import { PrismaClient } from '../src/generated/prisma/client.js';
 
 config({ path: '../.env' });
@@ -7,14 +8,21 @@ config({ path: '../.env' });
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
+const ADMIN_EMAIL = 'admin@spirit.dev';
+
 async function main(): Promise<void> {
+  const passwordHash = await bcrypt.hash(
+    process.env.SEED_ADMIN_PASSWORD ?? 'change-me',
+    Number(process.env.BCRYPT_SALT_ROUNDS ?? 12),
+  );
+
   const user = await prisma.user.upsert({
-    where: { email: 'admin@spirit.dev' },
+    where: { email: ADMIN_EMAIL },
     update: {},
     create: {
-      email: 'admin@spirit.dev',
-      name: 'Admin',
-      password: 'change-me',
+      email: ADMIN_EMAIL,
+      fullName: 'SpiritApex Admin',
+      passwordHash,
       role: 'ADMIN',
     },
   });

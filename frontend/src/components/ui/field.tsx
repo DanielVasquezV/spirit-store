@@ -1,7 +1,7 @@
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { useState } from 'react';
 import type { TextInputProps } from 'react-native';
-import { Colors, Hairline, Radius, Spacing, Type } from '@/constants/theme';
+import { Colors, ComposerMaxHeight, Hairline, Radius, Spacing, Type } from '@/constants/theme';
 
 type FieldProps = TextInputProps & {
   label?: string;
@@ -20,6 +20,9 @@ export function Field({ label, helper, error, ...rest }: FieldProps) {
         placeholderTextColor={Colors.textMuted}
         selectionColor={Colors.text}
         {...rest}
+        scrollEnabled={rest.multiline}
+        textAlignVertical={rest.multiline ? 'top' : rest.textAlignVertical}
+        blurOnSubmit={rest.multiline ? false : rest.blurOnSubmit}
         onFocus={(event) => {
           setFocused(true);
           rest.onFocus?.(event);
@@ -28,7 +31,7 @@ export function Field({ label, helper, error, ...rest }: FieldProps) {
           setFocused(false);
           rest.onBlur?.(event);
         }}
-        style={[styles.input, focused && styles.focused, !!error && styles.errored, rest.style]}
+        style={[styles.input, rest.multiline && styles.multiline, focused && styles.focused, !!error && styles.errored, rest.style]}
       />
       {error ? <Text style={styles.error}>{error}</Text> : helper ? <Text style={styles.helper}>{helper}</Text> : null}
     </View>
@@ -47,6 +50,13 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     ...Type.body,
     color: Colors.text,
+  },
+  multiline: {
+    height: undefined,
+    minHeight: 48,
+    maxHeight: ComposerMaxHeight,
+    paddingTop: Spacing.md,
+    textAlignVertical: 'top',
   },
   focused: { borderWidth: 1, borderColor: Colors.borderFocus },
   errored: { borderWidth: 1, borderColor: Colors.danger },

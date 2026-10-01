@@ -1,48 +1,86 @@
 import Feather from '@expo/vector-icons/Feather';
-import { router } from 'expo-router';
+import { router, type Href } from 'expo-router';
+import type { ComponentProps } from 'react';
 import { ScrollView, StyleSheet, Text, Pressable, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { Colors, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
+import { useSession } from '@/features/auth/session-provider';
+import { useRequireAuth } from '@/features/auth/use-require-auth';
+import { useDuiUpload } from '@/features/profile/use-dui-upload';
+import { DUI_STATUS_LABELS } from '@/lib/taxonomy';
 
-const MENU_ITEMS = ['Publicar un vehículo', 'Mis vehículos', 'Subastas seguidas', 'Notificaciones', 'Ajustes'];
+type MenuItem = { label: string; icon: ComponentProps<typeof Feather>['name']; href?: Href };
+
+// Notificaciones y Ajustes no tienen backend todavía: quedan visibles pero deshabilitados.
+const MENU_ITEMS: MenuItem[] = [
+  { label: 'Publicar un vehículo', icon: 'plus-square', href: '/vehicle/new' },
+  { label: 'Mis vehículos', icon: 'truck', href: '/my-vehicles' },
+  { label: 'Subastas seguidas', icon: 'activity', href: '/my-bids' },
+  { label: 'Mis compras y ventas', icon: 'shopping-bag', href: '/purchases' },
+  { label: 'Notificaciones', icon: 'bell' },
+  { label: 'Ajustes', icon: 'settings' },
+];
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const { user, signOut } = useSession();
+  const { requireAuth } = useRequireAuth();
+  const dui = useDuiUpload();
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader title="Perfil" />
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 104 + insets.bottom }]}>
         <View style={styles.identity}>
           <View style={styles.avatar}>
             <Feather name="user" size={32} color={Colors.textMuted} />
           </View>
-          <Text style={styles.name}>Invitado</Text>
-          <Text style={styles.meta}>Aún no iniciás sesión</Text>
+          <Text style={styles.name}>{user ? user.fullName : 'Invitado'}</Text>
+          <Text style={styles.meta}>{user ? user.email : 'Navegás sin cuenta: para comprar, pujar o chatear necesitás iniciar sesión'}</Text>
+          {user?.phoneNumber ? <Text style={styles.meta}>{user.phoneNumber}</Text> : null}
         </View>
 
-        <View style={styles.actions}>
-          <Button label="Iniciar sesión" fullWidth onPress={() => router.push('/login')} />
-          <Button label="Crear cuenta" variant="secondary" fullWidth onPress={() => router.push('/register')} />
-        </View>
-
-        <Text style={styles.sectionLabel}>Verificación</Text>
-        <View style={styles.card}>
-          <View style={styles.docRow}>
-            <View style={styles.docIcon}>
-              <Feather name="file-text" size={20} color={Colors.text} />
-            </View>
-            <View style={styles.docInfo}>
-              <Text style={styles.docTitle}>Documento DUI</Text>
-              <Text style={styles.docSub}>Se usa para publicar tus vehículos</Text>
-            </View>
-            <Badge label="Pendiente" />
+        {user ? (
+          <View style={styles.actions}>
+            <Button label="Editar perfil" variant="secondary" fullWidth onPress={() => router.push('/profile-edit')} />
+            {/* Cerrar sesión deja al usuario como invitado en la misma pantalla: la app sigue navegable sin cuenta. */}
+            <Button label="Cerrar sesión" variant="ghost" fullWidth onPress={() => void signOut()} />
           </View>
-          <Button label="Subir documento" variant="secondary" fullWidth onPress={() => {}} />
-        </View>
+        ) : (
+          <View style={styles.actions}>
+            <Button label="Iniciar sesión" fullWidth onPress={() => router.push('/login')} />
+            <Button label="Crear cuenta" variant="secondary" fullWidth onPress={() => router.push('/register')} />
+          </View>
+        )}
+
+        {user ? (
+          <>
+            <Text style={styles.sectionLabel}>Verificación</Text>
+            <View style={styles.card}>
+              <View style={styles.docRow}>
+                <View style={styles.docIcon}>
+                  <Feather name="file-text" size={20} color={Colors.text} />
+                </View>
+                <View style={styles.docInfo}>
+                  <Text style={styles.docTitle}>Documento DUI</Text>
+                  <Text style={styles.docSub}>Se usa para publicar tus vehículos y pujar</Text>
+                </View>
+                <Badge label={DUI_STATUS_LABELS[user.duiStatus]} tone={user.duiStatus === 'VERIFIED' ? 'accent' : 'neutral'} />
+              </View>
+              {dui.error ? <Text style={styles.error}>{dui.error}</Text> : null}
+              <Button
+                label={dui.uploading ? 'Subiendo…' : dui.loaded ? 'Reemplazar documento' : 'Subir documento'}
+                variant="secondary"
+                fullWidth
+                disabled={dui.uploading}
+                onPress={() => void dui.pickAndSave()}
+              />
+            </View>
+          </>
+        ) : null}
 
         <Text style={styles.sectionLabel}>Herramientas</Text>
         <View style={styles.card}>
@@ -55,8 +93,8 @@ export default function ProfileScreen() {
                 <Feather name="cpu" size={20} color={Colors.textInverse} />
               </View>
               <View style={styles.toolInfo}>
-                <Text style={styles.toolTitle}>Diagnóstico IA</Text>
-                <Text style={styles.toolSub}>Consultá fallas mecánicas antes de comprar o reparar</Text>
+                <Text style={styles.toolTitle}>Asistente IA</Text>
+                <Text style={styles.toolSub}>Diagnosticá fallas o pedí recomendaciones de autos del catálogo</Text>
               </View>
             </View>
             <Feather name="chevron-right" size={20} color={Colors.textMuted} />
@@ -66,14 +104,19 @@ export default function ProfileScreen() {
         <Text style={styles.sectionLabel}>Actividad</Text>
         <View style={styles.card}>
           {MENU_ITEMS.map((item, index) => (
-            <View key={item} style={[styles.menuRow, index < MENU_ITEMS.length - 1 && styles.menuRowBorder]}>
-              <Text style={styles.menuLabel}>{item}</Text>
-              <Feather name="chevron-right" size={20} color={Colors.textMuted} />
-            </View>
+            <Pressable
+              key={item.label}
+              accessibilityRole="button"
+              disabled={!item.href}
+              onPress={() => item.href && requireAuth(() => router.push(item.href!))}
+              style={({ pressed }) => [styles.menuRow, index < MENU_ITEMS.length - 1 && styles.menuRowBorder, pressed && styles.pressed]}>
+              <Text style={[styles.menuLabel, !item.href && styles.menuLabelDisabled]}>{item.label}</Text>
+              {item.href ? <Feather name="chevron-right" size={20} color={Colors.textMuted} /> : <Text style={styles.soon}>Próximamente</Text>}
+            </Pressable>
           ))}
         </View>
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -126,6 +169,9 @@ const styles = StyleSheet.create({
   },
   menuRowBorder: { borderBottomWidth: Hairline, borderBottomColor: Colors.border },
   menuLabel: { ...Type.body, color: Colors.text },
+  menuLabelDisabled: { color: Colors.textMuted },
+  soon: { ...Type.labelSm, color: Colors.textMuted },
+  error: { ...Type.caption, color: Colors.danger },
   pressed: { opacity: 0.7 },
   toolRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, flex: 1 },
   toolInfo: { flex: 1, gap: Spacing.xs },

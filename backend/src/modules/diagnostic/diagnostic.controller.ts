@@ -71,10 +71,6 @@ export const ask = asyncHandler(async (req: Request, res: Response) => {
 
   validator.assert();
 
-  const answer = await diagnosticService.askFollowUp(
-    userId(req),
-    requireUuid(String(req.params.id)),
-    question!,
-  );
-  ok(res, { answer });
+  const result = await diagnosticService.askFollowUp(userId(req), requireUuid(String(req.params.id)), question!);
+  ok(res, result);
 });

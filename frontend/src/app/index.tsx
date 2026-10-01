@@ -22,7 +22,8 @@ export default function SplashScreen() {
 
   useEffect(() => {
     if (!minElapsed || status === 'loading') return;
-    router.replace(status === 'authenticated' ? '/(tabs)' : '/login');
+    // La cuenta no es obligatoria: con o sin sesión se entra a Home; solo se espera a saber cuál de las dos es.
+    router.replace('/(tabs)');
   }, [minElapsed, status]);
 
   // scaleX con transformOrigin en left: el relleno crece de izquierda a derecha.
@@ -33,8 +34,8 @@ export default function SplashScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.center}>
-        <Logo size="lg" />
-        <Text style={styles.tagline}>Tu próximo vehículo, con carácter</Text>
+        {/* Mismo ancho que el splash nativo (imageWidth en app.json) para que el relevo no salte. */}
+        <Logo variant="full" width={200} />
       </View>
 
       <View style={styles.loader}>
@@ -60,9 +61,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: Spacing.xl,
   },
-  tagline: { ...Type.bodySm, color: Colors.textMuted, textAlign: 'center' },
   loader: {
     alignSelf: 'stretch',
     gap: Spacing.sm + 2,

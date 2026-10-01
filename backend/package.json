@@ -19,13 +19,14 @@
     "prisma:push": "prisma db push",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
-    "smoke": "tsx scripts/smoke.mjs"
+    "smoke": "tsx scripts/smoke.mjs",
+    "ai:check": "tsx scripts/ai-check.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@supabase/supabase-js": "^2.117.2",
     "bcrypt": "^6.0.0",
-    "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

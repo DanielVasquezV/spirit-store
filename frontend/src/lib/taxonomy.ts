@@ -1,6 +1,4 @@
-// Mapas EN→ES y utilidades de specs/badges derivados de los enums del backend.
-// El backend devuelve valores en inglés (MANUAL, AUTOMATIC, GASOLINE…); la UI
-// siempre renderiza etiquetas en español. Esto concentra el mapeo en un único punto.
+// Mapeo único de los enums del backend (en inglés) a las etiquetas en español que pinta la UI.
 
 import { groupThousands } from './format';
 import {
@@ -11,10 +9,14 @@ import {
   type ChatType,
   type Condition,
   type DiagnosticSeverity,
+  type DuiStatus,
+  type OrderStatus,
+  type PaymentMethod,
   type Fuel,
   type SaleType,
   type Transmission,
   type VehicleCategory,
+  type VehicleDto,
   type VehicleStatus,
 } from './types/api';
 
@@ -65,6 +67,7 @@ export const AUCTION_STATUS_LABELS: Record<AuctionStatus, string> = {
   ACTIVE: 'En vivo',
   FINISHED: 'Finalizada',
   CANCELLED: 'Cancelada',
+  CLOSED: 'Cerrada sin pago',
 };
 
 export const CHAT_TYPE_LABELS: Record<ChatType, string> = {
@@ -84,14 +87,13 @@ export const CATEGORY_OPTIONS = VEHICLE_CATEGORIES.map((value) => ({ value, labe
 export const TRANSMISSION_OPTIONS = TRANSMISSIONS.map((value) => ({ value, label: TRANSMISSION_LABELS[value] }));
 export const FUEL_OPTIONS = FUELS.map((value) => ({ value, label: FUEL_LABELS[value] }));
 
-// El backend no tiene filtros por precio predefined: el sheet envía minPrice y
-// maxPrice reales, y los buckets son solo la selección de rangos del picker.
+// El backend no tiene rangos predefinidos: el sheet envía minPrice y maxPrice reales y los buckets solo agrupan.
 export const PRICE_BUCKETS = [
   { id: 'all', label: 'Todos', min: undefined, max: undefined },
-  { id: 'lt25', label: 'Hasta 25,000', min: undefined, max: 25000 },
-  { id: '25-50', label: '25,000 - 50,000', min: 25000, max: 50000 },
-  { id: '50-100', label: '50,000 - 100,000', min: 50000, max: 100000 },
-  { id: 'gt100', label: 'Más de 100,000', min: 100000, max: undefined },
+  { id: 'lt25', label: 'Menos de $25,000', min: undefined, max: 25000 },
+  { id: '25-50', label: '$25,000 – $50,000', min: 25000, max: 50000 },
+  { id: '50-100', label: '$50,000 – $100,000', min: 50000, max: 100000 },
+  { id: 'gt100', label: 'Más de $100,000', min: 100000, max: undefined },
 ] as const;
 
 export type PriceBucketId = (typeof PRICE_BUCKETS)[number]['id'];
@@ -104,3 +106,59 @@ export function saleBadges(saleType: SaleType): string[] {
 export function vehicleSpecs(vehicle: { year: number; transmission: Transmission; mileage: number }): string[] {
   return [String(vehicle.year), TRANSMISSION_LABELS[vehicle.transmission], `${groupThousands(vehicle.mileage)} km`];
 }
+type CardVehicle = Pick<VehicleDto, 'id' | 'saleType' | 'status' | 'basePrice' | 'auction'>;
+
+// Un vehículo vendido o reservado sigue en el catálogo: el badge evita que parezca comprable.
+export function vehicleBadges(vehicle: Pick<VehicleDto, 'saleType' | 'status'>): string[] {
+  const badges = saleBadges(vehicle.saleType);
+  if (vehicle.status === 'SOLD' || vehicle.status === 'RESERVED') badges.push(VEHICLE_STATUS_LABELS[vehicle.status]);
+  return badges;
+}
+
+// En subasta manda la puja vigente; si nadie pujó, el precio de salida.
+export function vehiclePrice(vehicle: CardVehicle): { amount: number; caption?: string } {
+  if (vehicle.auction && vehicle.auction.status === 'ACTIVE') {
+    return vehicle.auction.currentBid !== null
+      ? { amount: vehicle.auction.currentBid, caption: 'Puja actual' }
+      : { amount: vehicle.auction.startingPrice, caption: 'Puja inicial' };
+  }
+  return { amount: vehicle.basePrice };
+}
+
+// Un vehículo con subasta viva abre la sala de pujas en vez de la ficha de venta.
+export function vehicleHref(vehicle: CardVehicle): `/auction/${string}` | `/product/${string}` {
+  return vehicle.auction && vehicle.auction.status === 'ACTIVE' ? `/auction/${vehicle.auction.id}` : `/product/${vehicle.id}`;
+}
+
+export function techSpecs(vehicle: VehicleDto): { label: string; value: string }[] {
+  return [
+    { label: 'Motor', value: vehicle.engine },
+    { label: 'Potencia', value: vehicle.power },
+    { label: 'Tracción', value: vehicle.drivetrain },
+    { label: 'Transmisión', value: TRANSMISSION_LABELS[vehicle.transmission] },
+    { label: 'Combustible', value: FUEL_LABELS[vehicle.fuel] },
+    { label: 'Kilometraje', value: `${groupThousands(vehicle.mileage)} km` },
+    { label: 'Condición', value: CONDITION_LABELS[vehicle.condition] },
+    { label: 'Año', value: String(vehicle.year) },
+  ];
+}
+
+export const DUI_STATUS_LABELS: Record<DuiStatus, string> = {
+  NONE: 'Sin cargar',
+  PENDING: 'En revisión',
+  VERIFIED: 'Verificado',
+  REJECTED: 'Rechazado',
+};
+
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  PENDING_PAYMENT: 'Pendiente de pago',
+  PAID: 'Pagada',
+  FAILED: 'Fallida',
+  CANCELLED: 'Cancelada',
+  REFUNDED: 'Reembolsada',
+};
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  CARD: 'Tarjeta',
+  BANK_TRANSFER: 'Transferencia bancaria',
+};

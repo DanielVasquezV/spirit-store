@@ -3,26 +3,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { Colors, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { CATEGORIES, FUEL_OPTIONS } from '@/lib/mock-data';
+import { CATEGORY_OPTIONS, FUEL_OPTIONS, PRICE_BUCKETS, TRANSMISSION_OPTIONS } from '@/lib/taxonomy';
+import type { Filters } from '@/lib/search';
 
-export type Filters = { price: string; category: string; transmission: string; fuel: string };
+type Option<T extends string> = { value: T; label: string };
 
-export const DEFAULT_FILTERS: Filters = {
-  price: 'all',
-  category: 'all',
-  transmission: 'all',
-  fuel: 'Todos',
-};
-
-const PRICE_BUCKETS: { id: string; label: string }[] = [
-  { id: 'all', label: 'Todos' },
-  { id: 'lt25', label: 'Menos de $25,000' },
-  { id: '25-50', label: '$25,000 – $50,000' },
-  { id: '50-100', label: '$50,000 – $100,000' },
-  { id: 'gt100', label: 'Más de $100,000' },
-];
-
-const TRANSMISSIONS = ['Todas', 'Automática', 'Manual'];
+// "Todos" se antepone a cada grupo: el backend no tiene ese valor, significa omitir el filtro.
+const PRICE_OPTIONS: Option<Filters['price']>[] = PRICE_BUCKETS.map((bucket) => ({ value: bucket.id, label: bucket.label }));
+const CATEGORY_CHOICES: Option<Filters['category']>[] = [{ value: 'all', label: 'Todo' }, ...CATEGORY_OPTIONS];
+const TRANSMISSION_CHOICES: Option<Filters['transmission']>[] = [{ value: 'all', label: 'Todas' }, ...TRANSMISSION_OPTIONS];
+const FUEL_CHOICES: Option<Filters['fuel']>[] = [{ value: 'all', label: 'Todos' }, ...FUEL_OPTIONS];
 
 type FilterBottomSheetProps = {
   visible: boolean;
@@ -33,11 +23,11 @@ type FilterBottomSheetProps = {
   onClose: () => void;
 };
 
-function ChipRow({ options, selected, onSelect }: { options: string[]; selected: string; onSelect: (value: string) => void }) {
+function ChipRow<T extends string>({ options, selected, onSelect }: { options: Option<T>[]; selected: T; onSelect: (value: T) => void }) {
   return (
     <View style={styles.chipRow}>
       {options.map((option) => (
-        <Chip key={option} label={option} selected={selected === option} onPress={() => onSelect(option)} />
+        <Chip key={option.value} label={option.label} selected={selected === option.value} onPress={() => onSelect(option.value)} />
       ))}
     </View>
   );
@@ -72,36 +62,22 @@ export function FilterBottomSheet({ visible, filters, isActive, onChange, onRese
           keyboardShouldPersistTaps="handled">
           <View style={styles.group}>
             <Text style={styles.groupTitle}>Rango de precio</Text>
-            <ChipRow
-              options={PRICE_BUCKETS.map((b) => b.label)}
-              selected={PRICE_BUCKETS.find((b) => b.id === filters.price)?.label ?? 'Todos'}
-              onSelect={(label) => {
-                const bucket = PRICE_BUCKETS.find((b) => b.label === label);
-                if (bucket) onChange({ price: bucket.id });
-              }}
-            />
+            <ChipRow options={PRICE_OPTIONS} selected={filters.price} onSelect={(price) => onChange({ price })} />
           </View>
 
           <View style={styles.group}>
             <Text style={styles.groupTitle}>Categoría</Text>
-            <ChipRow
-              options={CATEGORIES.map((c) => c.label)}
-              selected={CATEGORIES.find((c) => c.id === filters.category)?.label ?? 'Todo'}
-              onSelect={(label) => {
-                const category = CATEGORIES.find((c) => c.label === label);
-                if (category) onChange({ category: category.id });
-              }}
-            />
+            <ChipRow options={CATEGORY_CHOICES} selected={filters.category} onSelect={(category) => onChange({ category })} />
           </View>
 
           <View style={styles.group}>
             <Text style={styles.groupTitle}>Transmisión</Text>
-            <ChipRow options={TRANSMISSIONS} selected={filters.transmission} onSelect={(value) => onChange({ transmission: value })} />
+            <ChipRow options={TRANSMISSION_CHOICES} selected={filters.transmission} onSelect={(transmission) => onChange({ transmission })} />
           </View>
 
           <View style={styles.group}>
             <Text style={styles.groupTitle}>Combustible</Text>
-            <ChipRow options={[...FUEL_OPTIONS]} selected={filters.fuel} onSelect={(value) => onChange({ fuel: value })} />
+            <ChipRow options={FUEL_CHOICES} selected={filters.fuel} onSelect={(fuel) => onChange({ fuel })} />
           </View>
         </ScrollView>
 

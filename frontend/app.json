@@ -1,12 +1,13 @@
 {
   "expo": {
-    "name": "Spirit Store",
+    "name": "Spirit Apex",
     "slug": "spirit-store",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "spiritstore",
     "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0B0C",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
@@ -14,7 +15,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0B0B0C",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -33,14 +34,21 @@
         {
           "backgroundColor": "#0B0B0C",
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 76
+          "imageWidth": 200
         }
       ],
       "expo-font",
       "expo-image",
       "expo-status-bar",
       "expo-web-browser",
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Spirit Apex usa tus fotos para el documento DUI y las imágenes de los vehículos que publicás.",
+          "cameraPermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

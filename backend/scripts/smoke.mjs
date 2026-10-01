@@ -1,8 +1,8 @@
 /**
  * Smoke test end-to-end contra una instancia real de la API.
  *
- *   npm run dev            # en otra terminal
- *   npm run smoke          # aca
+ *   pnpm api:dev                                  # en otra terminal
+ *   pnpm --filter @spirit-store/backend smoke     # aca
  *
  * Cubre todos los endpoints de /api, incluidas las pujas y su push por socket.
  * No necesita framework de tests: son
@@ -12,8 +12,8 @@
  * Los tests que dependen de un servicio externo se saltan (y lo dicen) cuando
  * falta la credencial: es preferible un "SKIP" visible a un falso verde. Los
  * motivos se listan al final para no tener que buscarlos en la salida.
- *   - Cloudinary (subida/firma/borrado): requiere CLOUDINARY_URL.
- *   - Veredicto de la IA: requiere GEMINI_API_KEY y cuota disponible.
+ *   - Supabase Storage (subida/descarga/borrado reales): requiere SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY.
+ *   - Respuesta de la IA: requiere GROQ_API_KEY y cuota disponible.
  */
 
 import { config as loadEnv } from 'dotenv';
@@ -27,24 +27,24 @@ loadEnv({ path: resolve(here, '../../.env') });
 const BASE = process.env.SMOKE_BASE_URL ?? 'http://localhost:4000/api';
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@spirit.dev';
 const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'change-me';
-const CLOUDINARY_CONFIGURED = Boolean(process.env.CLOUDINARY_URL);
+const SUPABASE_CONFIGURED = Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+const STORAGE_SKIP = 'faltan SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY';
+// Sin proyecto el backend de desarrollo acepta cualquier URL pública de Supabase, así que una ficticia alcanza
+// para probar las validaciones de URL sin credenciales.
+const SUPABASE_URL = (process.env.SUPABASE_URL || 'https://smoke-ref.supabase.co').replace(/\/+$/, '');
+const BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'spirit-store';
+const STORAGE_PREFIX = `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/`;
 
-// El secreto sale de la URL para poder verificar que NO se filtra en las
-// respuestas. Vive solo en memoria, en este proceso de test.
-const CLOUDINARY_SECRET_FROM_URL = (() => {
-  try {
-    return new URL(process.env.CLOUDINARY_URL ?? '').password || '';
-  } catch {
-    return '';
-  }
-})();
+// URL pública con la misma forma que devuelve POST /uploads, para los tests que no suben nada.
+function storageUrl(path) {
+  return `${STORAGE_PREFIX}${path}`;
+}
 
 let pass = 0;
 let fail = 0;
 let skip = 0;
-// Motivo de cada `skipTest`, para que el resumen diga POR QUE se salto cada uno.
-// Sin esto el cierre imprimia siempre "falta CLOUDINARY_URL" y eso era falso
-// cuando lo omitido era la IA: el mismo "1 omitido" con dos causas distintas.
+// Motivo de cada `skipTest`, para que el resumen diga POR QUE se salto cada uno: el mismo "1 omitido"
+// puede venir del almacenamiento o de la IA, y cada uno se arregla distinto.
 const skipReasons = [];
 const created = [];
 
@@ -213,7 +213,7 @@ section('PATCH /api/auth/me');
   check('phoneNumber null -> 400', nullPhone.status === 400, `fue ${nullPhone.status}`);
 
   const extUrl = await req('PATCH', '/auth/me', { token: regToken, body: { duiPhotoUrl: 'https://evil.com/x.jpg' } });
-  check('duiPhotoUrl no-Cloudinary -> 400', extUrl.status === 400, `fue ${extUrl.status}`);
+  check('duiPhotoUrl de otro host -> 400', extUrl.status === 400, `fue ${extUrl.status}`);
 
   const partial = await req('PATCH', '/auth/me', { token: regToken, body: { fullName: 'Smoke Actualizado' } });
   check('PATCH parcial = 200', partial.status === 200, `fue ${partial.status}`);
@@ -221,41 +221,6 @@ section('PATCH /api/auth/me');
   check('  ...no toca phoneNumber', partial.json?.data?.phoneNumber === regPhone,
     `quedo ${partial.json?.data?.phoneNumber}`);
   check('  ...no toca role', partial.json?.data?.role === 'BUYER');
-}
-
-section('POST /api/uploads/sign');
-{
-  const noAuth = await req('POST', '/uploads/sign', { body: { kind: 'vehicles', contentType: 'image/jpeg' } });
-  check('sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
-
-  if (!CLOUDINARY_CONFIGURED) {
-    const r = await req('POST', '/uploads/sign', { token: regToken, body: { kind: 'vehicles', contentType: 'image/jpeg' } });
-    check('sin credenciales -> 503', r.status === 503, `fue ${r.status}`);
-    skipTest('firma real', 'CLOUDINARY_URL vacio');
-  } else {
-    const r = await req('POST', '/uploads/sign', { token: regToken, body: { kind: 'vehicles', contentType: 'image/jpeg' } });
-    check('200', r.status === 200, `fue ${r.status} ${JSON.stringify(r.json)}`);
-    const s = r.json?.data ?? {};
-    check('devuelve signature', typeof s.signature === 'string' && s.signature.length > 20);
-    // Comprobar `typeof === 'string'` no alcanza: el string vacio lo pasa, y una
-    // config de Cloudinary vacia es exactamente lo que rompia este endpoint.
-    check('devuelve apiKey con contenido', typeof s.apiKey === 'string' && s.apiKey.length > 10,
-      `llego "${s.apiKey}"`);
-    check('devuelve cloudName con contenido', typeof s.cloudName === 'string' && s.cloudName.length > 2,
-      `llego "${s.cloudName}"`);
-    check('devuelve folder', typeof s.folder === 'string' && s.folder.includes('vehicles'));
-    check('devuelve timestamp numerico', Number.isFinite(s.timestamp));
-    // El secreto no puede viajar al movil: la app solo necesita la api key
-    // publica para firmar. Se busca la clave y ademas se busca el valor real
-    // del secreto (sacado del env) dentro del JSON de la respuesta.
-    check('sin clave apiSecret en la respuesta', !('apiSecret' in s));
-    const realSecret = CLOUDINARY_SECRET_FROM_URL;
-    check('el secreto real no aparece en el JSON',
-      Boolean(realSecret) && !JSON.stringify(r.json).includes(realSecret),
-      `no se pudo extraer el secreto de CLOUDINARY_URL (valor: "${realSecret}")`);
-  }
-  const badKind = await req('POST', '/uploads/sign', { token: regToken, body: { kind: '../../etc', contentType: 'image/jpeg' } });
-  check('kind invalido -> 400', badKind.status === 400, `fue ${badKind.status}`);
 }
 
 section('POST /api/uploads (multipart)');
@@ -271,71 +236,50 @@ let uploadedPublicId = '';
   const r1 = await req('POST', '/uploads', { token: regToken, form: badMime });
   check('mime no permitido -> 415', r1.status === 415, `fue ${r1.status}`);
 
-  if (!CLOUDINARY_CONFIGURED) {
+  const badKind = new FormData();
+  badKind.append('kind', '../../etc');
+  badKind.append('file', new Blob([PNG_1x1], { type: 'image/png' }), 'x.png');
+  const rk = await req('POST', '/uploads', { token: regToken, form: badKind });
+  check('kind invalido -> 400', rk.status === 400, `fue ${rk.status}`);
+
+  if (!SUPABASE_CONFIGURED) {
     const f = new FormData();
     f.append('file', new Blob([PNG_1x1], { type: 'image/png' }), 'x.png');
     const r2 = await req('POST', '/uploads', { token: regToken, form: f });
-    check('sin credenciales -> 503', r2.status === 503, `fue ${r2.status}`);
-    skipTest('subida real', 'CLOUDINARY_URL vacio');
+    check('sin credenciales -> 503 UPLOAD_UNAVAILABLE', r2.status === 503 && r2.json?.error?.code === 'UPLOAD_UNAVAILABLE',
+      `fue ${r2.status} ${r2.json?.error?.code}`);
+    skipTest('subida real a Supabase', STORAGE_SKIP);
   } else {
+    // `kind` va antes que el archivo: multer solo ve los campos de texto que llegan primero.
     const f = new FormData();
-    f.append('file', new Blob([PNG_1x1], { type: 'image/png' }), 'smoke.png');
     f.append('kind', 'vehicles');
+    f.append('file', new Blob([PNG_1x1], { type: 'image/png' }), 'smoke.png');
     const r2 = await req('POST', '/uploads', { token: regToken, form: f });
-    // 201: se creo un recurso nuevo, no 200.
     check('201', r2.status === 201, `fue ${r2.status} ${JSON.stringify(r2.json)}`);
     const u = r2.json?.data ?? {};
     uploadedPublicId = u.publicId ?? '';
-    check('devuelve url https', String(u.url).startsWith('https://res.cloudinary.com/'), `url ${u.url}`);
-    check('devuelve publicId', typeof uploadedPublicId === 'string' && uploadedPublicId.includes('vehicles'));
-    check('publicId con folder + usuario', uploadedPublicId.split('/').length >= 3, uploadedPublicId);
-    check('publicId sin extension duplicada', !/\.[a-z0-9]+\.[a-z0-9]+$/.test(u.url),
-      `la url trae doble extension: ${u.url}`);
-    check('la url termina en una sola extension', /\.[a-z0-9]+$/.test(String(u.url)), `url ${u.url}`);
-    check('devuelve bytes', Number.isFinite(u.bytes) && u.bytes > 0);
-    check('devuelve width/height', Number.isFinite(u.width) && Number.isFinite(u.height));
+    check('la url es del bucket propio', String(u.url).startsWith(STORAGE_PREFIX), `url ${u.url}`);
+    check('la url es la publica del objeto subido', String(u.url) === storageUrl(uploadedPublicId), `url ${u.url}`);
+    check('publicId en la carpeta vehicles', uploadedPublicId.includes('/vehicles/'), uploadedPublicId);
+    check('publicId con folder + usuario', uploadedPublicId.split('/').length >= 4, uploadedPublicId);
+    check('publicId con una sola extension', /^[^.]+\.png$/.test(uploadedPublicId.split('/').at(-1) ?? ''), uploadedPublicId);
+    check('devuelve bytes', u.bytes === PNG_1x1.length, `bytes ${u.bytes}`);
+    check('width/height en null (Supabase no procesa la imagen)', u.width === null && u.height === null);
     check('devuelve resourceType image', u.resourceType === 'image');
-  }
-}
 
-section('Subida directa a Cloudinary con la firma (sin pasar por la API)');
-{
-  // Es el flujo que la app va a usar en las galerias: pedir la firma, subir el
-  // archivo directo a Cloudinary y guardar el publicId. Probar solo que la
-  // firma "se ve bien" no alcanza: si la transformacion firmada no coincide con
-  // la que Cloudinary aplica, la subida se rechaza con un 400 sin explicación.
-  if (!CLOUDINARY_CONFIGURED) {
-    skipTest('subida firmada', 'CLOUDINARY_URL vacio');
-  } else {
-    const s = await req('POST', '/uploads/sign', { token: regToken, body: { kind: 'vehicles', contentType: 'image/png' } });
-    if (s.status !== 200) {
-      skipTest('subida firmada', `no se pudo obtener la firma (${s.status})`);
-    } else {
-      const p = s.json.data;
-      const form = new FormData();
-      form.append('file', new Blob([PNG_1x1], { type: 'image/png' }), 'directa.png');
-      form.append('api_key', p.apiKey);
-      form.append('timestamp', String(p.timestamp));
-      form.append('signature', p.signature);
-      form.append('folder', p.folder);
-      form.append('transformation', p.transformation);
+    // La URL tiene que servir sin credenciales: es la que la app muestra y la que se guarda en el DUI.
+    const download = await fetch(u.url);
+    check('la descarga publica responde 200', download.status === 200, `fue ${download.status}`);
+    check('  ...con el content-type subido', String(download.headers.get('content-type')).startsWith('image/png'),
+      `content-type ${download.headers.get('content-type')}`);
+    const bytes = Buffer.from(await download.arrayBuffer());
+    check('  ...y los mismos bytes', bytes.equals(PNG_1x1), `llegaron ${bytes.length} bytes`);
 
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${p.cloudName}/image/upload`, {
-        method: 'POST', body: form,
-      });
-      const json = await res.json().catch(() => ({}));
-      check('Cloudinary acepta la firma -> 200', res.status === 200,
-        `fue ${res.status}: ${JSON.stringify(json?.error?.message ?? json)}`);
-      check('el asset queda en la carpeta firmada',
-        String(json?.public_id ?? '').startsWith(p.folder),
-        `public_id ${json?.public_id} vs folder ${p.folder}`);
-
-      if (res.status === 200) {
-        // Y se limpia desde la API, que es el otro camino que usa la app.
-        const del = await req('DELETE', `/uploads?publicId=${encodeURIComponent(json.public_id)}&kind=vehicles`, { token: regToken });
-        check('el publicId firmado se puede borrar desde la API', del.status === 204, `fue ${del.status}`);
-      }
-    }
+    const dui = await req('PATCH', '/auth/me', { token: regToken, body: { duiPhotoUrl: u.url } });
+    check('la url subida sirve como DUI', dui.status === 200, `fue ${dui.status} ${JSON.stringify(dui.json?.error)}`);
+    check('  ...y lo deja VERIFIED', dui.json?.data?.duiStatus === 'VERIFIED', `quedo ${dui.json?.data?.duiStatus}`);
+    const clear = await req('PATCH', '/auth/me', { token: regToken, body: { duiPhotoUrl: null } });
+    check('quitar el DUI lo vuelve a NONE', clear.json?.data?.duiStatus === 'NONE', `quedo ${clear.json?.data?.duiStatus}`);
   }
 }
 
@@ -353,13 +297,12 @@ section('DELETE /api/uploads');
   const traversal = await req('DELETE', `/uploads?publicId=${encodeURIComponent('spiritapex/../../etc/passwd')}&kind=vehicles`, { token: regToken });
   check('path traversal -> 400', traversal.status === 400, `fue ${traversal.status}`);
 
-  if (!CLOUDINARY_CONFIGURED) {
-    skipTest('borrado real', 'CLOUDINARY_URL vacio');
+  if (!SUPABASE_CONFIGURED) {
+    skipTest('borrado real en Supabase', STORAGE_SKIP);
   } else if (!uploadedPublicId) {
-    skipTest('borrado real', 'no se pudo subir el archivo antes');
+    skipTest('borrado real en Supabase', 'no se pudo subir el archivo antes');
   } else {
-    // 204: no hay cuerpo, el borrado no "devuelve" nada. Y debe ser idempotente,
-    // porque la app puede reintentar cuando la red se corta.
+    // 204 sin cuerpo, e idempotente: la app reintenta cuando se corta la red.
     const del = await req('DELETE', `/uploads?publicId=${encodeURIComponent(uploadedPublicId)}&kind=vehicles`, { token: regToken });
     check('borrado propio -> 204', del.status === 204, `fue ${del.status} ${JSON.stringify(del.json)}`);
     const again = await req('DELETE', `/uploads?publicId=${encodeURIComponent(uploadedPublicId)}&kind=vehicles`, { token: regToken });
@@ -485,7 +428,7 @@ let sellerId = '';
 
   const dui = await req('PATCH', '/auth/me', {
     token: sellerToken,
-    body: { duiPhotoUrl: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/dui/smoke.jpg' },
+    body: { duiPhotoUrl: storageUrl('spiritapex/dui/smoke.jpg') },
   });
   check('cargar DUI -> 200', dui.status === 200, `fue ${dui.status}`);
   created.push(email);
@@ -520,7 +463,7 @@ section('POST /api/vehicles (validacion)');
     token: sellerToken,
     body: { ...base, images: [{ url: 'https://evil.com/x.jpg' }] },
   });
-  check('imagen no-Cloudinary -> 400', badImage.status === 400, `fue ${badImage.status}`);
+  check('imagen de otro host -> 400', badImage.status === 400, `fue ${badImage.status}`);
 
   // AUCTION exige el bloque de subasta: sin el, el vehiculo quedaria en un
   // limbo sin fechas ni precio de salida.
@@ -551,8 +494,8 @@ let auctionId = '';
     basePrice: 128500, saleType: 'AUCTION',
     auction: { startingPrice: 120000, endTime: new Date(Date.now() + 86400000).toISOString() },
     images: [{
-      url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/smoke-1.jpg',
-      publicId: 'spiritapex/vehicles/smoke-1',
+      url: storageUrl('spiritapex/vehicles/smoke-1.jpg'),
+      publicId: 'spiritapex/vehicles/smoke-1.jpg',
     }],
   };
   const r = await req('POST', '/vehicles', { token: sellerToken, body });
@@ -566,7 +509,7 @@ let auctionId = '';
   check('  ...incluye la subasta', typeof auctionId === 'string' && auctionId.length > 0);
   check('  ...subasta ACTIVE', v.auction?.status === 'ACTIVE', `quedo ${v.auction?.status}`);
   check('  ...trae la foto', Array.isArray(v.images) && v.images.length === 1, `llego ${JSON.stringify(v.images)}`);
-  check('  ...guarda el publicId', v.images?.[0]?.publicId === 'spiritapex/vehicles/smoke-1');
+  check('  ...guarda el publicId', v.images?.[0]?.publicId === 'spiritapex/vehicles/smoke-1.jpg', `llego ${v.images?.[0]?.publicId}`);
   check('  ...basePrice es numero', typeof v.basePrice === 'number', `llego ${typeof v.basePrice}`);
   check('  ...el vendedor viene incluido', v.seller?.id === sellerId, `llego ${JSON.stringify(v.seller)}`);
   check('  ...el vendedor NO expone duiPhotoUrl', !('duiPhotoUrl' in (v.seller ?? {})),
@@ -710,27 +653,26 @@ section('PATCH /api/vehicles/:id');
 section('POST/DELETE /api/vehicles/:id/images');
 let imageId = '';
 {
-  const noAuth = await req('POST', `/vehicles/${vehicleId}/images`, { body: { url: 'https://res.cloudinary.com/demo/x.jpg' } });
+  const noAuth = await req('POST', `/vehicles/${vehicleId}/images`, { body: { url: storageUrl('spiritapex/vehicles/x.jpg') } });
   check('agregar sin token -> 401', noAuth.status === 401, `fue ${noAuth.status}`);
 
   const other = await req('POST', `/vehicles/${vehicleId}/images`, {
-    token: regToken, body: { url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/x.jpg' },
+    token: regToken, body: { url: storageUrl('spiritapex/vehicles/x.jpg') },
   });
   check('otro usuario -> 403', other.status === 403, `fue ${other.status}`);
 
   const bad = await req('POST', `/vehicles/${vehicleId}/images`, { token: sellerToken, body: { url: 'https://evil.com/x.jpg' } });
-  check('url no-Cloudinary -> 400', bad.status === 400, `fue ${bad.status}`);
+  check('url de otro host -> 400', bad.status === 400, `fue ${bad.status}`);
 
   const r = await req('POST', `/vehicles/${vehicleId}/images`, {
     token: sellerToken,
-    body: { url: 'https://res.cloudinary.com/demo/image/upload/v1/spiritapex/vehicles/smoke-2.jpg', publicId: 'spiritapex/vehicles/smoke-2' },
+    body: { url: storageUrl('spiritapex/vehicles/smoke-2.jpg'), publicId: 'spiritapex/vehicles/smoke-2.jpg' },
   });
   check('agregar foto -> 201', r.status === 201, `fue ${r.status}`);
   check('  ...quedan dos fotos', r.json?.data?.images?.length === 2, `quedaron ${r.json?.data?.images?.length}`);
   imageId = r.json?.data?.images?.at(-1)?.id ?? '';
 
-  // Sin Cloudinary configurado el borrado del asset falla, pero la foto tiene
-  // que salir de la galeria igual.
+  // Sin Supabase configurado el borrado del objeto falla, pero la foto tiene que salir de la galeria igual.
   const del = await req('DELETE', `/vehicles/${vehicleId}/images/${imageId}`, { token: sellerToken });
   check('quitar foto -> 204', del.status === 204, `fue ${del.status}`);
   check('  ...vuelve a quedar una', (await req('GET', `/vehicles/${vehicleId}`)).json?.data?.images?.length === 1);
@@ -912,7 +854,10 @@ for (const [i, tag] of ['b1', 'b2', 'b3'].entries()) {
   const r = await req('POST', '/auth/register', {
     body: { email, password: 'Pujador1!', fullName: `Pujador ${tag}`, phone: `+54 9 11 4000-100${i}` },
   });
-  bidders.push({ tag, token: r.json?.data?.accessToken ?? '', id: r.json?.data?.user?.id ?? '' });
+  const token = r.json?.data?.accessToken ?? '';
+  // Pujar exige DUI: los postores de la suite lo cargan al registrarse.
+  await req('PATCH', '/auth/me', { token, body: { duiPhotoUrl: storageUrl(`spiritapex/dui/${tag}.jpg`) } });
+  bidders.push({ tag, token, id: r.json?.data?.user?.id ?? '' });
 }
 const [b1, b2, b3] = bidders;
 
@@ -978,6 +923,17 @@ const live = await mkAuction('LIVE');
   // truncarlo en silencio seria peor que rechazarlo.
   const threeDecimals = await req('POST', `/auctions/${live.auctionId}/bids`, { token: b1.token, body: { amount: 10000.125 } });
   check('amount con 3 decimales -> 400', threeDecimals.status === 400, `fue ${threeDecimals.status}`);
+
+  const noDuiEmail = uniqueEmail('nodui');
+  created.push(noDuiEmail);
+  const noDuiUser = await req('POST', '/auth/register', {
+    body: { email: noDuiEmail, password: 'Pujador1!', fullName: 'Pujador sin DUI', phone: '+54 9 11 4000-1099' },
+  });
+  const noDui = await req('POST', `/auctions/${live.auctionId}/bids`, {
+    token: noDuiUser.json?.data?.accessToken, body: { amount: 10000 },
+  });
+  check('pujar sin DUI -> 403 DUI_REQUIRED', noDui.status === 403 && noDui.json?.error?.code === 'DUI_REQUIRED',
+    `fue ${noDui.status} ${noDui.json?.error?.code}`);
 
   const noSuch = await req('POST', '/auctions/00000000-0000-0000-0000-000000000000/bids', { token: b1.token, body: { amount: 10000 } });
   check('subasta inexistente -> 404', noSuch.status === 404, `fue ${noSuch.status}`);
@@ -1156,7 +1112,10 @@ section('Cierre automatico (ACTIVE -> FINISHED)');
   const closing = await mkAuction('CLOSE', { startingPrice: 7000, minBidIncrement: 100, endInMs: 2500 });
   check('subasta corta creada y activa', closing.status === 'ACTIVE', `quedo ${closing.status}`);
 
-  const bid = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b2.token, body: { amount: 7000 } });
+  // b1 puja primero y b2 lo supera: así el registro tiene un ganador y un postor que perdió.
+  const loserBid = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b1.token, body: { amount: 7000 } });
+  check('primera puja antes de vencer -> 201', loserBid.status === 201, `fue ${loserBid.status}`);
+  const bid = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b2.token, body: { amount: 7100 } });
   check('puja antes de vencer -> 201', bid.status === 201, `fue ${bid.status}`);
 
   await sleep(2800);
@@ -1173,8 +1132,26 @@ section('Cierre automatico (ACTIVE -> FINISHED)');
   });
   check('la subasta vencida termina FINISHED sola', Boolean(after), 'no llego a FINISHED en 20s');
   check('  ...con el ganador fijado', after?.currentWinner?.id === b2.id, `llego ${after?.currentWinner?.id}`);
-  check('  ...y su puja mas alta', after?.currentBid === 7000, `llego ${after?.currentBid}`);
-  check('  ...el vehiculo quedo SOLD', after?.vehicle?.status === 'SOLD', `quedo ${after?.vehicle?.status}`);
+  check('  ...y su puja mas alta', after?.currentBid === 7100, `llego ${after?.currentBid}`);
+  // Con ganador el vehículo queda reservado hasta que pague la orden que creó el cierre.
+  check('  ...el vehiculo quedo RESERVED', after?.vehicle?.status === 'RESERVED', `quedo ${after?.vehicle?.status}`);
+
+  const winnerOrders = (await req('GET', '/orders?role=buyer', { token: b2.token })).json?.data ?? [];
+  const auctionOrder = winnerOrders.find((o) => o.vehicleId === after?.vehicleId && o.origin === 'AUCTION');
+  check('el cierre crea la orden del ganador', auctionOrder?.status === 'PENDING_PAYMENT', `llego ${auctionOrder?.status}`);
+  check('  ...con la puja ganadora como subtotal', auctionOrder?.subtotal === 7100, `llego ${auctionOrder?.subtotal}`);
+  check('  ...y un plazo para pagar', Boolean(auctionOrder?.expiresAt), `llego ${auctionOrder?.expiresAt}`);
+
+  const winnerHistory = (await req('GET', '/auctions/mine?role=winner', { token: b2.token })).json?.data ?? [];
+  const winnerRow = winnerHistory.find((a) => a.id === closing.auctionId);
+  check('el registro del ganador la muestra como WINNER', winnerRow?.myRole === 'WINNER', `llego ${winnerRow?.myRole}`);
+  check('  ...con su puja mas alta', winnerRow?.myHighestBid === 7100, `llego ${winnerRow?.myHighestBid}`);
+  check('  ...y la orden pendiente', winnerRow?.order?.id === auctionOrder?.id, `llego ${winnerRow?.order?.id}`);
+  const loserRow = ((await req('GET', '/auctions/mine', { token: b1.token })).json?.data ?? []).find((a) => a.id === closing.auctionId);
+  check('el que perdio la ve como BIDDER y sin la orden ajena', loserRow?.myRole === 'BIDDER' && loserRow?.order === null,
+    `llego ${loserRow?.myRole} ${JSON.stringify(loserRow?.order)}`);
+  const badRole = await req('GET', '/auctions/mine?role=admin', { token: b2.token });
+  check('registro con role invalido -> 400', badRole.status === 400, `fue ${badRole.status}`);
 
   const late = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b1.token, body: { amount: 9000 } });
   check('pujar en una subasta cerrada -> 409', late.status === 409, `fue ${late.status}`);
@@ -1187,6 +1164,22 @@ section('Cierre automatico (ACTIVE -> FINISHED)');
   const again = await req('POST', '/auctions/lifecycle', { token: adminToken });
   check('el ciclo de vida es idempotente', !(again.json?.data?.closed ?? []).some((c) => c.auctionId === closing.auctionId),
     `llego ${JSON.stringify(again.json?.data?.closed)}`);
+
+  // Ganador que no paga: al cancelar (o vencer) su orden la subasta queda CLOSED y ahí termina.
+  if (auctionOrder) {
+    const unpaid = await req('POST', `/orders/${auctionOrder.id}/cancel`, { token: b2.token });
+    check('el ganador cancela la orden -> 204', unpaid.status === 204, `fue ${unpaid.status}`);
+    const closed = (await req('GET', `/auctions/${closing.auctionId}`)).json?.data;
+    check('  ...la subasta queda CLOSED', closed?.status === 'CLOSED', `quedo ${closed?.status}`);
+    check('  ...y el vehiculo vuelve a AVAILABLE', closed?.vehicle?.status === 'AVAILABLE', `quedo ${closed?.vehicle?.status}`);
+    const sellerClosed = (await req('GET', '/auctions/mine?role=seller&status=CLOSED', { token: sellerToken })).json?.data ?? [];
+    check('  ...el vendedor la encuentra filtrando por CLOSED', sellerClosed.some((a) => a.id === closing.auctionId),
+      `llegaron ${sellerClosed.length}`);
+    const lateClosed = await req('POST', `/auctions/${closing.auctionId}/bids`, { token: b1.token, body: { amount: 9500 } });
+    check('  ...y ya no admite pujas -> 409', lateClosed.status === 409, `fue ${lateClosed.status}`);
+  } else {
+    skipTest('subasta sin pago -> CLOSED', 'el cierre no creo la orden del ganador');
+  }
 }
 
 section('Cierre sin pujas: el vehiculo vuelve al catalogo');
@@ -1518,7 +1511,7 @@ section('Diagnostico por IA');
     });
     check('preguntar a un diagnostico inexistente -> 404', noQuestion.status === 404,
       `fue ${noQuestion.status}`);
-    skipTest('veredicto, severidad y seguimiento del modelo', 'sin GEMINI_API_KEY');
+    skipTest('respuesta, severidad y seguimiento del modelo', 'sin GROQ_API_KEY');
   } else if (!diagId) {
     // Hay key pero el proveedor fallo (cuota, saturacion). Se omite el bloque
     // en vez de seguir adelante con un id vacio: `GET /diagnostics/` seria el
@@ -1626,15 +1619,17 @@ section('Invariante de cierre (barrido de todas las subastas)');
     },
   });
 
+  // Con ganador el vehículo queda RESERVED hasta el pago y SOLD después; nunca AVAILABLE mientras siga FINISHED.
   const rotas = rows.filter((a) => {
-    const vendido = a.status === 'FINISHED' && a.currentWinnerId !== null;
-    const coherente = a.status !== 'FINISHED'
-      || (a.currentWinnerId === null ? a.vehicle.status !== 'SOLD' : a.vehicle.status === 'SOLD');
-    return vendido && !coherente;
+    const conGanador = a.status === 'FINISHED' && a.currentWinnerId !== null;
+    return conGanador && !['RESERVED', 'SOLD'].includes(a.vehicle.status);
   });
+  const cerradasVendidas = rows.filter((a) => a.status === 'CLOSED' && a.vehicle.status === 'SOLD');
+  check('ninguna subasta CLOSED (sin pago) dejo el vehiculo vendido', cerradasVendidas.length === 0,
+    cerradasVendidas.map((a) => a.id.slice(0, 8)).join(', '));
 
   check('hay subastas para revisar', rows.length > 0, `solo hay ${rows.length}`);
-  check('ninguna subasta cerrada con ganador tiene el vehiculo en otro estado', rotas.length === 0,
+  check('ninguna subasta cerrada con ganador dejo el vehiculo a la venta', rotas.length === 0,
     rotas.map((a) => `${a.id.slice(0, 8)} winner=${a.currentWinnerId} vehiculo=${a.vehicle.status}`).join(', '));
 
   const sinPujasEnVenta = rows.filter(
@@ -1725,9 +1720,12 @@ section('Invariante de cierre (barrido de todas las subastas)');
       closure?.winnerId === lockWinner.id, `llego ${String(closure?.winnerId)}`);
 
     const lvAfter = await prisma.vehicle.findUniqueOrThrow({ where: { id: lv.id } });
-    check('el vehiculo con ganador queda SOLD, no AVAILABLE',
-      lvAfter.status === 'SOLD', `quedo ${lvAfter.status}`);
+    check('el vehiculo con ganador queda RESERVED, no AVAILABLE',
+      lvAfter.status === 'RESERVED', `quedo ${lvAfter.status}`);
 
+    // El cierre creó la orden y el chat del ganador: caen antes que el vehículo por los FKs Restrict.
+    await prisma.chat.deleteMany({ where: { vehicleId: lv.id } });
+    await prisma.order.deleteMany({ where: { vehicleId: lv.id } });
     await prisma.bid.deleteMany({ where: { auctionId: la.id } });
     await prisma.auction.deleteMany({ where: { id: la.id } });
     await prisma.vehicle.deleteMany({ where: { id: lv.id } });
@@ -1839,6 +1837,10 @@ section('Documentacion OpenAPI (/docs, /docs.json)');
     for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) {
       mounts.set(m[2], `/api${m[1]}`);
     }
+    // router.use(taxonomyRoutes) sin prefijo: el router declara sus rutas completas bajo /api.
+    for (const m of index.matchAll(/router\.use\(\s*(\w+)\s*\)/g)) {
+      if (!mounts.has(m[1])) mounts.set(m[1], '/api');
+    }
     for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) void m;
 
     // Las rutas declaradas dentro del propio index cuelgan de /api.
@@ -1933,11 +1935,11 @@ if (skip > 0) {
   for (const [reason, n] of reasons) console.log(`    ${n}x  ${reason}`);
 
   const hasReason = (needle) => [...reasons.keys()].some((r) => r.includes(needle));
-  if (hasReason('CLOUDINARY_URL')) {
-    console.log('    Para correrlos: CLOUDINARY_URL=cloudinary://key:secret@cloud en ../.env');
+  if (hasReason('SUPABASE_')) {
+    console.log('    Para correrlos: SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en ../.env (ver INSTALLATION.md §3).');
   }
-  if (hasReason('GEMINI_API_KEY') || hasReason('la creacion fallo')) {
-    console.log('    Para correrlos: GEMINI_API_KEY valida en ../.env, contra un server');
+  if (hasReason('GROQ_API_KEY') || hasReason('la creacion fallo')) {
+    console.log('    Para correrlos: GROQ_API_KEY valida en ../.env, contra un server');
     console.log('    arrancado despues de cargarla (SMOKE_BASE_URL=http://localhost:PUERTO/api).');
   }
 }
@@ -1962,6 +1964,19 @@ if (process.env.SMOKE_CLEANUP === '0') {
       const sellerIds = sellers.map((u) => u.id);
       const owned = await prisma.vehicle.findMany({ where: { sellerId: { in: sellerIds } }, select: { id: true } });
       const vehicleIds = owned.map((v) => v.id);
+
+      const chats = await prisma.chat.findMany({
+        where: { OR: [{ buyerId: { in: sellerIds } }, { sellerId: { in: sellerIds } }, { vehicleId: { in: vehicleIds } }] },
+        select: { id: true },
+      });
+      const chatIds = chats.map((c) => c.id);
+      const messages = await prisma.message.deleteMany({ where: { chatId: { in: chatIds } } });
+      const chatRows = await prisma.chat.deleteMany({ where: { id: { in: chatIds } } });
+
+      // Las órdenes (compras y cierres de subasta) apuntan con Restrict al vehículo y a ambos usuarios.
+      const orders = await prisma.order.deleteMany({
+        where: { OR: [{ vehicleId: { in: vehicleIds } }, { buyerId: { in: sellerIds } }, { sellerId: { in: sellerIds } }] },
+      });
       const auctions = await prisma.auction.deleteMany({ where: { vehicleId: { in: vehicleIds } } });
       const vehicles = await prisma.vehicle.deleteMany({ where: { sellerId: { in: sellerIds } } });
 
@@ -1972,17 +1987,9 @@ if (process.env.SMOKE_CLEANUP === '0') {
       const diagnosticMessages = await prisma.aiDiagnosticMessage.deleteMany({ where: { diagnosticId: { in: diagnosticIds } } });
       const diagnosticRows = await prisma.aiDiagnostic.deleteMany({ where: { userId: { in: sellerIds } } });
 
-      const chats = await prisma.chat.findMany({
-        where: { OR: [{ buyerId: { in: sellerIds } }, { sellerId: { in: sellerIds } }] },
-        select: { id: true },
-      });
-      const chatIds = chats.map((c) => c.id);
-      const messages = await prisma.message.deleteMany({ where: { chatId: { in: chatIds } } });
-      const chatRows = await prisma.chat.deleteMany({ where: { id: { in: chatIds } } });
-
       const { count } = await prisma.user.deleteMany({ where: { email: { startsWith: 'smoke.' } } });
       await prisma.$disconnect();
-      console.log(`Limpieza: ${auctions.count} subasta(s), ${vehicles.count} vehiculo(s), `
+      console.log(`Limpieza: ${orders.count} orden(es), ${auctions.count} subasta(s), ${vehicles.count} vehiculo(s), `
         + `${chatRows.count} chat(s) con ${messages.count} mensaje(s), `
         + `${diagnosticRows.count} diagnostico(s) con ${diagnosticMessages.count} mensaje(s), `
         + `${count} usuario(s) smoke.* eliminados.\n`);

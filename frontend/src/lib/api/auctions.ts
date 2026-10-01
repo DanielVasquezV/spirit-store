@@ -1,5 +1,5 @@
 import { http, type Paginated } from './http-client';
-import type { AuctionDto, AuctionStatus, BidDto, MyBidDto } from '@/lib/types/api';
+import type { AuctionDto, AuctionHistoryItemDto, AuctionStatus, BidDto, MyBidDto } from '@/lib/types/api';
 
 export interface AuctionFilters {
   status?: AuctionStatus;
@@ -35,4 +35,13 @@ export function placeBid(auctionId: string, amount: number): Promise<PlaceBidRes
 
 export function listMyBids(page: number, pageSize: number): Promise<Paginated<MyBidDto>> {
   return http.paginated<MyBidDto>('/bids/mine', { query: { page, pageSize } });
+}
+export interface AuctionHistoryFilters {
+  role?: 'seller' | 'winner' | 'bidder';
+  status?: AuctionStatus;
+  q?: string;
+}
+
+export function listMyAuctions(filters: AuctionHistoryFilters, page: number, pageSize: number): Promise<Paginated<AuctionHistoryItemDto>> {
+  return http.paginated<AuctionHistoryItemDto>('/auctions/mine', { query: { ...filters, page, pageSize } });
 }

@@ -173,61 +173,11 @@ export const paths = {
       responses: {
         200: successEnvelope('#/components/schemas/SelfUser', 'Perfil actualizado.'),
         400: errorResponse('VALIDATION_ERROR', 'Validation failed', {
-          duiPhotoUrl: 'La URL del DUI debe venir de Cloudinary',
+          duiPhotoUrl: 'La URL del DUI debe venir del almacenamiento de la app',
         }),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'El rol ADMIN no se puede autogenerar desde el perfil'),
         404: errorResponse('NOT_FOUND', 'User not found'),
-      },
-    },
-  },
-
-  '/api/uploads/sign': {
-    post: {
-      tags: ['Uploads'],
-      summary: 'Firmar una subida directa a Cloudinary',
-      description: [
-        'Devuelve los parámetros para que el móvil suba **directo** a Cloudinary sin',
-        'que el archivo pase por la API. Es la vía recomendada para galerías de',
-        'vehículo: la foto no vuelve a viajar por el backend, que en móvil significa',
-        'gastar datos del usuario y RAM del servidor.',
-        '',
-        '**Cómo usarlo:** `POST` a `https://api.cloudinary.com/v1_1/{cloudName}/image/upload`',
-        'con `multipart/form-data` y exactamente estos campos: `file`, `api_key`,',
-        '`timestamp`, `signature`, `folder`, `transformation`.',
-        '',
-        'La firma cubre `timestamp`, `folder` y `transformation`. Si el cliente cambia',
-        'alguno de esos tres al subir, Cloudinary rechaza la petición con 400. El',
-        '`apiSecret` nunca sale del backend.',
-      ].join('\n'),
-      security: [{ bearerAuth: [] }],
-      requestBody: {
-        required: true,
-        content: {
-          'application/json': {
-            schema: {
-              type: 'object',
-              required: ['kind'],
-              properties: {
-                kind: { $ref: '#/components/schemas/UploadKind' },
-                contentType: {
-                  type: 'string',
-                  description: 'Informativo, no se usa para firmar.',
-                  example: 'image/jpeg',
-                },
-              },
-            },
-            examples: {
-              vehiculo: { summary: 'Foto de vehículo', value: { kind: 'vehicles', contentType: 'image/jpeg' } },
-            },
-          },
-        },
-      },
-      responses: {
-        200: successEnvelope('#/components/schemas/SignedUploadParams', 'Firma generada.'),
-        400: errorResponse('VALIDATION_ERROR', 'kind debe ser uno de: vehicles, dui, chat, misc'),
-        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
-        503: errorResponse('UPLOAD_UNAVAILABLE', 'El servicio de subida de archivos no está configurado (revise CLOUDINARY_URL)'),
       },
     },
   },
@@ -237,16 +187,12 @@ export const paths = {
       tags: ['Uploads'],
       summary: 'Subir un archivo a través de la API',
       description: [
-        'Subida **proxy**: el archivo viaja en el multipart y sale de aquí. Es la vía',
-        'simple, para el DUI o adjuntos de chat. Para galerías de vehículo conviene',
-        '`/uploads/sign` + subida directa.',
-        '',
-        'El archivo se guarda ya transformado (`q_auto`, `f_auto`, 2000x2000 con',
-        '`c_limit`) para no depender de Cloudinary en caliente al mostrar imágenes.',
+        'Subida **proxy** a Supabase Storage: el archivo viaja en el multipart y el backend',
+        'lo guarda en el bucket público de la app. Se usa para el DUI y las fotos de',
+        'vehículos; la `url` devuelta es la que después se referencia en `/auth/me` o `/vehicles`.',
         '',
         'MIME aceptados: `image/jpeg`, `image/png`, `image/webp`, `image/heic`,',
-        '`image/heif`, `application/pdf`. El filtro se basa en el MIME declarado,',
-        'no en los bytes: Cloudinary es quien valida y transcodea el contenido real.',
+        '`image/heif`, `application/pdf`. El filtro se basa en el MIME declarado.',
       ].join('\n'),
       security: [{ bearerAuth: [] }],
       requestBody: {
@@ -269,8 +215,8 @@ export const paths = {
         400: errorResponse('VALIDATION_ERROR', "Falta el archivo en el campo 'file'"),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         415: errorResponse('UNSUPPORTED_MEDIA_TYPE', 'Tipo de archivo no permitido: application/x-sh'),
-        502: errorResponse('UPLOAD_FAILED', 'Cloudinary rechazó la subida'),
-        503: errorResponse('UPLOAD_UNAVAILABLE', 'El servicio de subida de archivos no está configurado (revise CLOUDINARY_URL)'),
+        502: errorResponse('UPLOAD_FAILED', 'Supabase Storage rechazó la subida'),
+        503: errorResponse('UPLOAD_UNAVAILABLE', 'El servicio de subida de archivos no está configurado (revise SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY)'),
       },
     },
     delete: {
@@ -295,7 +241,7 @@ export const paths = {
           required: true,
           description: 'Identificador del asset, tal como lo devolvió la subida.',
           schema: { type: 'string' },
-          example: 'spiritapex/vehicles/4aebb21f-ecb5-46c8-8d88-783278512ae2/1790712099661-a3w6d5w0',
+          example: 'spiritapex/vehicles/4aebb21f-ecb5-46c8-8d88-783278512ae2/1790712099661-a3w6d5w0.jpg',
         },
         {
           name: 'kind',
@@ -312,7 +258,7 @@ export const paths = {
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'El asset no pertenece a esta carpeta de la aplicación'),
         502: errorResponse('UPLOAD_FAILED', 'No se pudo eliminar el archivo'),
-        503: errorResponse('UPLOAD_UNAVAILABLE', 'El servicio de subida de archivos no está configurado (revise CLOUDINARY_URL)'),
+        503: errorResponse('UPLOAD_UNAVAILABLE', 'El servicio de subida de archivos no está configurado (revise SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY)'),
       },
     },
   },
@@ -438,7 +384,7 @@ export const paths = {
         'Si `saleType` es `AUCTION` hay que mandar el bloque `auction` con',
         '`startingPrice` y `endTime`; la subasta se crea en la misma operación y el',
         'vehículo queda `IN_AUCTION`. Las fotos se suben antes con',
-        '`/uploads/sign` y acá solo se referencian por URL de Cloudinary.',
+        '`POST /uploads` y acá solo se referencian por la URL de Supabase Storage.',
       ].join('\n'),
       security: [{ bearerAuth: [] }],
       requestBody: {
@@ -557,7 +503,7 @@ export const paths = {
       tags: ['Vehículos'],
       summary: 'Agregar una foto a la galería',
       description: [
-        'La foto se sube antes directa a Cloudinary con `/api/uploads/sign` y acá se',
+        'La foto se sube antes con `POST /api/uploads` y acá se',
         'asocia al vehículo. Guardar el `publicId` es lo que permite borrarla del',
         'proveedor después. Si no se manda `position`, la foto va al final de la',
         'galería.',
@@ -572,7 +518,7 @@ export const paths = {
               type: 'object',
               required: ['url'],
               properties: {
-                url: { type: 'string', format: 'uri', description: 'Debe ser una URL de Cloudinary.' },
+                url: { type: 'string', format: 'uri', description: 'Debe ser una URL pública del bucket de Supabase de la app.' },
                 publicId: { type: 'string' },
                 position: { type: 'integer', description: '0 es la portada.' },
               },
@@ -582,7 +528,7 @@ export const paths = {
       },
       responses: {
         201: successEnvelope('#/components/schemas/Vehicle', 'Vehículo con la nueva foto.'),
-        400: errorResponse('VALIDATION_ERROR', 'La imagen debe venir de Cloudinary'),
+        400: errorResponse('VALIDATION_ERROR', 'La imagen debe venir del almacenamiento de la app'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
         404: errorResponse('NOT_FOUND', 'Vehicle not found'),
@@ -596,7 +542,7 @@ export const paths = {
       summary: 'Quitar una foto de la galería',
       description: [
         'Solo el dueño del vehículo o un ADMIN. Si la foto se había guardado con',
-        '`publicId`, también se intenta borrar el asset de Cloudinary; si esa',
+        '`publicId`, también se intenta borrar el objeto de Supabase Storage; si esa',
         'llamada falla la foto igual sale de la galería, porque dejar la foto pegada',
         'sería peor que dejar un asset huérfano.',
       ].join('\n'),
@@ -656,6 +602,31 @@ export const paths = {
         403: errorResponse('FORBIDDEN', 'Solo el vendedor puede subastar su vehiculo'),
         404: errorResponse('NOT_FOUND', 'Vehicle not found'),
         409: errorResponse('CONFLICT', 'El vehiculo ya tiene una subasta asociada'),
+      },
+    },
+  },
+
+  '/api/auctions/mine': {
+    get: {
+      tags: ['Subastas'],
+      summary: 'Registro de mis subastas',
+      description: [
+        'Las subastas que el usuario creó y aquellas en las que pujó, de la más reciente a la más vieja.',
+        '`role` filtra por rol (`seller` creadas, `winner` ganadas, `bidder` en las que pujó), `status` por',
+        'estado y `q` por marca o modelo.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'role', in: 'query', required: false, schema: { type: 'string', enum: ['seller', 'winner', 'bidder'] } },
+        { name: 'status', in: 'query', required: false, schema: { $ref: '#/components/schemas/AuctionStatus' } },
+        { name: 'q', in: 'query', required: false, schema: { type: 'string' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/AuctionHistoryItem', 'Página del registro.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
       },
     },
   },
@@ -772,6 +743,7 @@ export const paths = {
         'de escribir la primera, así que solo una puede ganar por el mismo monto y',
         '`currentBid` nunca divergen del máximo real.',
         '',
+        'Hace falta tener el DUI cargado (403 `DUI_REQUIRED`).',
         '**No se puede** pujar en una subasta propia (403), ni sobre la propia puja',
         'actual (409: no hay escrow, así que no compra nada y un doble toque en la app',
         'pagaría dos veces por error), ni en una subasta que no está `ACTIVE`.',
@@ -790,7 +762,7 @@ export const paths = {
         201: successEnvelope('#/components/schemas/BidPlacement', 'Puja registrada.'),
         400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
-        403: errorResponse('FORBIDDEN', 'No podes pujar en tu propia subasta'),
+        403: errorResponse('DUI_REQUIRED', 'Carga tu DUI en el perfil para poder pujar'),
         404: errorResponse('NOT_FOUND', 'Auction not found'),
         409: errorResponse(
           'CONFLICT',
@@ -990,7 +962,9 @@ export const paths = {
       tags: ['Diagnóstico IA'],
       summary: 'Pedir un diagnóstico',
       description: [
-        'Crea el diagnóstico y pide el primer análisis a Gemini.',
+        'Abre una conversación con el asistente y pide la primera respuesta. Detecta si es',
+        'un diagnóstico, una recomendación de compra (sobre el catálogo propio), una consulta',
+        'automotriz general o algo fuera de tema, y lo informa en `messages[].intent`.',
         '',
         '**La fila se guarda antes de llamar al modelo.** Si la llamada falla, el',
         'usuario conserva la pregunta y puede reintentar sin volver a escribirla,',
@@ -1002,9 +976,9 @@ export const paths = {
         'el modelo recibe marca, modelo, año y kilometraje sin que el cliente los',
         'repita.',
         '',
-        'Si el servidor no tiene `GEMINI_API_KEY` la llamada responde `503`',
-        '`AI_UNAVAILABLE` **después** de guardar la fila, por lo que tampoco se',
-        'pierde. `GET /diagnostics/availability` permite consultar antes.',
+        'Si el servidor no tiene `GROQ_API_KEY` la llamada responde `503`',
+        '`AI_UNAVAILABLE` **antes** de guardar nada, para no dejar diagnósticos vacíos.',
+        '`GET /diagnostics/availability` permite consultarlo sin gastar la llamada.',
       ].join('\n'),
       security: [{ bearerAuth: [] }],
       requestBody: {
@@ -1071,7 +1045,7 @@ export const paths = {
         content: { 'application/json': { schema: { $ref: '#/components/schemas/AskDiagnosticRequest' } } },
       },
       responses: {
-        201: successEnvelope('#/components/schemas/DiagnosticAnswer', 'Respuesta del asistente.'),
+        201: successEnvelope('#/components/schemas/DiagnosticAnswer', 'Respuesta del asistente y el hilo actualizado.'),
         400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         404: errorResponse('NOT_FOUND', 'Diagnostic not found'),
@@ -1103,6 +1077,136 @@ export const paths = {
         400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         404: errorResponse('NOT_FOUND', 'Diagnostic not found'),
+      },
+    },
+  },
+
+  '/api/taxonomies': {
+    get: {
+      tags: ['Catálogo'],
+      summary: 'Enums del catálogo con etiquetas en español',
+      security: [],
+      responses: {
+        200: successEnvelope('#/components/schemas/Taxonomies', 'Transmisiones, combustibles, categorías y demás enums.'),
+      },
+    },
+  },
+
+  '/api/orders': {
+    get: {
+      tags: ['Órdenes'],
+      summary: 'Mis órdenes como comprador o vendedor',
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'role', in: 'query', required: false, schema: { type: 'string', enum: ['buyer', 'seller'] } },
+      ],
+      responses: {
+        200: {
+          description: 'Órdenes del usuario, más nuevas primero. No está paginado.',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', enum: [true] },
+                  data: { type: 'array', items: { $ref: '#/components/schemas/Order' } },
+                },
+              },
+            },
+          },
+        },
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+    post: {
+      tags: ['Órdenes'],
+      summary: 'Crear la orden de un vehículo y reservarlo',
+      description: 'Reserva el vehículo en la misma transacción. Un vehículo RESERVED, IN_AUCTION o SOLD responde 409.',
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateOrderRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/Order', 'Orden creada en PENDING_PAYMENT.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+        409: errorResponse('CONFLICT', 'Este vehiculo ya esta reservado'),
+      },
+    },
+  },
+
+  '/api/orders/{id}': {
+    get: {
+      tags: ['Órdenes'],
+      summary: 'Detalle de una orden propia',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        200: successEnvelope('#/components/schemas/Order', 'Orden.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Order not found'),
+      },
+    },
+  },
+
+  '/api/orders/{id}/checkout-session': {
+    post: {
+      tags: ['Órdenes'],
+      summary: 'Abrir la sesión de pago (simulada)',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        201: successEnvelope('#/components/schemas/CheckoutSession', 'Sesión de pago.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Order not found'),
+        409: errorResponse('CONFLICT', 'Esta orden ya no esta pendiente de pago'),
+      },
+    },
+  },
+
+  '/api/orders/{id}/confirm': {
+    post: {
+      tags: ['Órdenes'],
+      summary: 'Pagar la orden (pago simulado)',
+      description: [
+        'Requiere haber abierto la sesión con `checkout-session`. Aprobado: orden PAID, vehículo SOLD y',
+        '`order:paid` al comprador y al vendedor. Es idempotente: una orden ya pagada devuelve el comprobante.',
+        '',
+        'De la tarjeta solo viajan marca, últimos 4 dígitos y titular: nunca el número completo ni el CVV.',
+        'Tarjeta de prueba de rechazo: la que termina en **0002** responde 402 `PAYMENT_DECLINED` y la orden',
+        'sigue pendiente con `paymentStatus: FAILED` para reintentar.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/ConfirmPaymentRequest' } } },
+      },
+      responses: {
+        200: successEnvelope('#/components/schemas/Order', 'Orden pagada.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        402: errorResponse('PAYMENT_DECLINED', 'El pago fue rechazado. Proba con otra tarjeta o con transferencia.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Order not found'),
+        409: errorResponse('ORDER_EXPIRED', 'La reserva vencio. Volve a la ficha para intentar la compra de nuevo.'),
+      },
+    },
+  },
+
+  '/api/orders/{id}/cancel': {
+    post: {
+      tags: ['Órdenes'],
+      summary: 'Cancelar una orden pendiente y liberar el vehículo',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        204: noContentResponse('Orden cancelada.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Order not found'),
+        409: errorResponse('CONFLICT', 'Solo se pueden cancelar ordenes pendientes de pago'),
       },
     },
   },

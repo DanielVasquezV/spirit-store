@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 
-import { asyncHandler } from '../../middleware/error-handler.js';
+import { AppError, asyncHandler } from '../../middleware/error-handler.js';
 import { created, paginated } from '../../lib/api-response.js';
 import { parsePagination, readNumber, requireUuid, Validator } from '../../lib/validate.js';
 import * as bidService from './bid.service.js';
@@ -10,6 +10,13 @@ function requester(req: Request): { id: string; role: string } {
 }
 
 export const place = asyncHandler(async (req: Request, res: Response) => {
+  // Pujar compromete a pagar si se gana: igual que para publicar, hace falta tener el DUI cargado.
+  if (!req.user!.duiPhotoUrl) {
+    throw new AppError(403, 'DUI_REQUIRED', 'Carga tu DUI en el perfil para poder pujar', {
+      duiPhotoUrl: 'El DUI es obligatorio para pujar',
+    });
+  }
+
   const body = (req.body ?? {}) as Record<string, unknown>;
   const validator = new Validator();
 

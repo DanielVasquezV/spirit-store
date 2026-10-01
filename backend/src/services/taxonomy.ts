@@ -51,6 +51,7 @@ export const AUCTION_STATUS_LABELS = {
   ACTIVE: 'En vivo',
   FINISHED: 'Finalizada',
   CANCELLED: 'Cancelada',
+  CLOSED: 'Cerrada sin pago',
 } as const;
 
 export const CHAT_TYPE_LABELS = {

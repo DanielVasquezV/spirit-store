@@ -1,26 +1,36 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Logo } from '@/components/logo';
-import { ProductCard } from '@/components/product-card';
 import { SearchBar } from '@/components/search-bar';
+import { ListSkeleton, StateView } from '@/components/state-view';
+import { VehicleCard } from '@/components/vehicle-card';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { IconButton } from '@/components/ui/icon-button';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Colors, Layout, Spacing, Type } from '@/constants/theme';
-import { CATEGORIES, CART_COUNT, FEATURED_PRODUCTS, saleBadges, vehicleSpecs } from '@/lib/mock-data';
+import { useRequireAuth } from '@/features/auth/use-require-auth';
+import { useFeaturedVehicles } from '@/features/catalog/use-catalog';
+import { usePendingPurchases } from '@/features/orders/use-orders';
+import { CATEGORY_OPTIONS } from '@/lib/taxonomy';
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const [activeCategory, setActiveCategory] = useState('all');
+  // El badge cuenta compras esperando pago: es lo único que pide acción desde el ícono.
+  const pendingPurchases = usePendingPurchases();
+  const { requireAuth } = useRequireAuth();
+  const featured = useFeaturedVehicles();
+  const vehicles = featured.data?.items ?? [];
 
   return (
     <View style={styles.screen}>
       <ScrollView
         contentContainerStyle={[styles.content, { paddingTop: insets.top + Spacing.lg }]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={featured.isRefetching} onRefresh={() => void featured.refetch()} tintColor={Colors.textMuted} />
+        }>
         <View style={styles.header}>
           <View style={styles.brand}>
             <Logo />
@@ -28,13 +38,14 @@ export default function HomeScreen() {
           </View>
           <IconButton
             icon="shopping-bag"
-            accessibilityLabel="Carrito"
-            badge={CART_COUNT}
-            onPress={() => router.push('/cart')}
+            accessibilityLabel="Mis compras"
+            badge={pendingPurchases.length}
+            onPress={() => requireAuth(() => router.push('/purchases'))}
           />
         </View>
 
-        <SearchBar onFilterPress={() => {}} />
+        {/* Home no busca en sitio: cualquier intención de búsqueda abre la pestaña Buscar. */}
+        <SearchBar onFilterPress={() => router.push('/search')} onSubmit={(q) => router.push({ pathname: '/search', params: { q } })} />
 
         <View style={styles.section}>
           <SectionHeader title="Categorías" />
@@ -42,12 +53,11 @@ export default function HomeScreen() {
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chips}>
-            {CATEGORIES.map((category) => (
+            {CATEGORY_OPTIONS.map((category) => (
               <Chip
-                key={category.id}
+                key={category.value}
                 label={category.label}
-                selected={activeCategory === category.id}
-                onPress={() => setActiveCategory(category.id)}
+                onPress={() => router.push({ pathname: '/search', params: { category: category.value } })}
               />
             ))}
           </ScrollView>
@@ -56,21 +66,22 @@ export default function HomeScreen() {
         <View style={styles.section}>
           <SectionHeader
             title="Destacados"
-            count={`${FEATURED_PRODUCTS.length} VEHÍCULOS`}
+            count={featured.data ? `${featured.data.total} DISPONIBLES` : undefined}
             action={<Button label="Ver todos" variant="ghost" size="sm" onPress={() => router.push('/search')} />}
           />
-          <View style={styles.products}>
-            {FEATURED_PRODUCTS.map((product) => (
-              <ProductCard
-                key={product.id}
-                title={product.title}
-                price={product.price}
-                badges={saleBadges(product.saleType)}
-                specs={vehicleSpecs(product)}
-                onPress={() => {}}
-              />
-            ))}
-          </View>
+          {featured.isPending ? (
+            <ListSkeleton count={2} />
+          ) : featured.isError ? (
+            <StateView icon="wifi-off" title="No pudimos cargar el catálogo" body="Revisá tu conexión e intentá de nuevo." actionLabel="Reintentar" onAction={() => void featured.refetch()} />
+          ) : vehicles.length === 0 ? (
+            <StateView icon="truck" title="Sin vehículos disponibles" body="Todavía no hay publicaciones en venta." />
+          ) : (
+            <View style={styles.products}>
+              {vehicles.map((vehicle) => (
+                <VehicleCard key={vehicle.id} vehicle={vehicle} />
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
     </View>

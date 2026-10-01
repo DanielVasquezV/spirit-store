@@ -1,5 +1,4 @@
-// DTOs espejados del backend. Si el contrato cambia, cambia acá y en features/*,
-// nunca dentro de una pantalla.
+// DTOs espejo del backend: si el contrato cambia se toca acá y en features/*, nunca en una pantalla.
 
 export const TRANSMISSIONS = ['MANUAL', 'AUTOMATIC'] as const;
 export const FUELS = ['GASOLINE', 'DIESEL', 'ELECTRIC', 'HYBRID'] as const;
@@ -7,12 +6,18 @@ export const VEHICLE_CATEGORIES = ['SUV', 'SEDAN', 'SPORT', 'ELECTRIC', 'PICKUP'
 export const CONDITIONS = ['NEW', 'LIKE_NEW', 'USED', 'FOR_PARTS'] as const;
 export const SALE_TYPES = ['DIRECT_SALE', 'AUCTION', 'BOTH'] as const;
 export const VEHICLE_STATUSES = ['DRAFT', 'AVAILABLE', 'IN_AUCTION', 'RESERVED', 'SOLD'] as const;
-export const AUCTION_STATUSES = ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED'] as const;
+export const AUCTION_STATUSES = ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED', 'CLOSED'] as const;
 export const CHAT_TYPES = ['PURCHASE', 'SALE', 'AUCTION_WIN'] as const;
 export const MESSAGE_TYPES = ['TEXT', 'IMAGE', 'OFFER'] as const;
 export const DIAGNOSTIC_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'] as const;
 export const DIAGNOSTIC_SENDERS = ['USER', 'AI_ASSISTANT'] as const;
 export const ROLES = ['BUYER', 'SELLER', 'ADMIN'] as const;
+export const DUI_STATUSES = ['NONE', 'PENDING', 'VERIFIED', 'REJECTED'] as const;
+export const ORDER_STATUSES = ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'REFUNDED'] as const;
+export const PAYMENT_STATUSES = ['PENDING', 'COMPLETED', 'FAILED', 'REFUNDED'] as const;
+export const UPLOAD_KINDS = ['vehicles', 'dui', 'chat', 'misc'] as const;
+export const PAYMENT_METHODS = ['CARD', 'BANK_TRANSFER'] as const;
+export const ASSISTANT_INTENTS = ['DIAGNOSIS', 'RECOMMENDATION', 'GENERAL', 'OFF_TOPIC'] as const;
 
 export type Transmission = (typeof TRANSMISSIONS)[number];
 export type Fuel = (typeof FUELS)[number];
@@ -26,6 +31,12 @@ export type MessageType = (typeof MESSAGE_TYPES)[number];
 export type DiagnosticSeverity = (typeof DIAGNOSTIC_SEVERITIES)[number];
 export type DiagnosticSender = (typeof DIAGNOSTIC_SENDERS)[number];
 export type Role = (typeof ROLES)[number];
+export type DuiStatus = (typeof DUI_STATUSES)[number];
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
+export type UploadKind = (typeof UPLOAD_KINDS)[number];
+export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+export type AssistantIntent = (typeof ASSISTANT_INTENTS)[number];
 
 export interface SelfUser {
   id: string;
@@ -33,6 +44,8 @@ export interface SelfUser {
   fullName: string;
   phoneNumber: string | null;
   duiPhotoUrl: string | null;
+  duiStatus: DuiStatus;
+  duiVerifiedAt: string | null;
   role: Role;
   isActive: boolean;
   createdAt: string;
@@ -43,7 +56,7 @@ export interface AuthResult {
   user: SelfUser;
   accessToken: string;
   tokenType: 'Bearer';
-  /** Vida del access token tal como la define el backend. */
+  // Vida del access token tal como la define el backend.
   expiresIn: string;
 }
 
@@ -118,12 +131,21 @@ export interface AuctionDto {
   endTime: string;
   status: AuctionStatus;
   bidCount: number;
-  /** Solo las 10 más recientes que el backend incluye en el detalle. */
+  // Solo las 10 más recientes que el backend incluye en el detalle.
   recentBids: BidDto[];
   vehicle: VehicleDto;
   seller: { id: string; fullName: string };
   createdAt: string;
   updatedAt: string;
+}
+
+export type AuctionHistoryRole = 'SELLER' | 'WINNER' | 'BIDDER';
+
+// Fila del registro de subastas del usuario: la subasta más su rol y la orden que generó el cierre.
+export interface AuctionHistoryItemDto extends AuctionDto {
+  myRole: AuctionHistoryRole;
+  myHighestBid: number | null;
+  order: { id: string; status: OrderStatus; paymentStatus: PaymentStatus; buyerId: string } | null;
 }
 
 export interface MyBidDto extends BidDto {
@@ -147,10 +169,22 @@ export interface ChatPreviewDto {
   chatType: ChatType;
   vehicle: { id: string; title: string; imageUrl: string | null } | null;
   counterpart: { id: string; fullName: string };
+  viewerRole: 'BUYER' | 'SELLER';
   lastMessage: ChatMessageDto | null;
   unreadCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RecommendedVehicleDto {
+  id: string;
+  title: string;
+  year: number;
+  basePrice: number;
+  saleType: SaleType;
+  imageUrl: string | null;
+  // Subasta en vivo: la tarjeta abre la sala de pujas en vez de la ficha.
+  auctionId: string | null;
 }
 
 export interface DiagnosticMessageDto {
@@ -158,6 +192,8 @@ export interface DiagnosticMessageDto {
   sender: DiagnosticSender;
   content: string;
   model: string | null;
+  intent: AssistantIntent | null;
+  recommendations: RecommendedVehicleDto[];
   createdAt: string;
 }
 
@@ -182,12 +218,61 @@ export interface AiDiagnosticDetailDto extends AiDiagnosticDto {
   messages: DiagnosticMessageDto[];
 }
 
+export interface OrderDto {
+  id: string;
+  orderNumber: string;
+  vehicleId: string;
+  buyerId: string;
+  sellerId: string;
+  buyer: { id: string; fullName: string };
+  seller: { id: string; fullName: string };
+  vehicle: { id: string; title: string; year: number; imageUrl: string | null };
+  // AUCTION: la generó el cierre de una subasta que el usuario ganó.
+  origin: 'DIRECT_SALE' | 'AUCTION';
+  subtotal: number;
+  taxRate: number;
+  taxAmount: number;
+  totalAmount: number;
+  currency: string;
+  status: OrderStatus;
+  paymentStatus: PaymentStatus;
+  paymentMethod: PaymentMethod | null;
+  // Lo mostrable del pago: "VISA •••• 4242" o la referencia de la transferencia.
+  paymentReference: string | null;
+  // Límite para pagar antes de que el backend libere el vehículo.
+  expiresAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CheckoutSessionDto {
+  clientSecret: string;
+  orderId: string;
+  orderNumber: string;
+  amount: number;
+  currency: string;
+  expiresAt: string | null;
+  // El backend no tiene pasarela real: con `mock` la app confirma el pago por API.
+  mode: 'mock';
+}
+
+export interface UploadedAssetDto {
+  url: string;
+  publicId: string;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+  format: string;
+  resourceType: 'image' | 'raw' | 'video';
+}
+
 export interface BidPlacedEvent {
   auctionId: string;
   bid: BidDto;
   currentBid: number;
   minBidIncrement: number;
-  /** Lo que tiene que poner el siguiente postor, ya redondeado por el servidor. */
+  // Lo que tiene que poner el siguiente postor, ya redondeado por el servidor.
   minimumNextBid: number;
   bidCount: number;
   currentWinner: { id: string; fullName: string } | null;
@@ -212,6 +297,8 @@ export interface AuctionClosedEvent {
   status: AuctionStatus;
   winnerId: string | null;
   currentBid: number | null;
+  // Orden pendiente de pago del ganador.
+  orderId: string | null;
 }
 
 export interface ChatMessageEvent {
@@ -231,6 +318,19 @@ export interface DiagnosticDoneEvent {
   summary: string | null;
   severity: string | null;
   confidence: number | null;
+}
+
+export interface OrderPaidEvent {
+  orderId: string;
+  orderNumber: string;
+  vehicleId: string;
+  buyerId: string;
+  sellerId: string;
+  status: OrderStatus;
+  paymentStatus: PaymentStatus;
+  totalAmount: number;
+  currency: string;
+  completedAt: string | null;
 }
 
 export interface ConnectionErrorEvent {

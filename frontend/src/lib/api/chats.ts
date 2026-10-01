@@ -5,7 +5,7 @@ export function listChats(page: number, pageSize: number): Promise<Paginated<Cha
   return http.paginated<ChatPreviewDto>('/chats', { query: { page, pageSize } });
 }
 
-/** El backend devuelve 201 si la conversación es nueva y 200 si ya existía. */
+// El backend devuelve 201 si la conversación es nueva y 200 si ya existía.
 export function openChat(vehicleId: string, chatType?: ChatType): Promise<ChatPreviewDto> {
   return http.post<ChatPreviewDto>('/chats', chatType ? { vehicleId, chatType } : { vehicleId });
 }

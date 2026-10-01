@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { toCents } from '../../lib/money.js';
 import { emitAuctionClosed, emitAuctionStarted } from '../../socket/realtime.js';
+import { createAuctionOrderTx } from '../order/order.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 
 /**
@@ -53,6 +54,8 @@ export interface AuctionClosure {
    *  catalogo en vez de quedarse vendido. */
   winnerId: string | null;
   currentBid: number | null;
+  /** Orden pendiente de pago del ganador; null si nadie pujó. */
+  orderId: string | null;
 }
 
 /**
@@ -78,18 +81,28 @@ export async function finalizeAuction(tx: Db, auctionId: string): Promise<Auctio
 
   const auction = await tx.auction.findUnique({
     where: { id: auctionId },
-    select: { id: true, vehicleId: true, status: true, currentWinnerId: true, currentBid: true },
+    select: { id: true, vehicleId: true, sellerId: true, status: true, currentWinnerId: true, currentBid: true },
   });
   if (!auction || auction.status !== 'ACTIVE') return null;
 
   const winnerId = auction.currentWinnerId;
   await tx.auction.update({ where: { id: auctionId }, data: { status: 'FINISHED' } });
-  // El `status: 'IN_AUCTION'` del where evita pisar un vehiculo que otro flujo
-  // (por ejemplo una baja logica del vendedor) ya haya movido.
+  // Con ganador el vehículo queda RESERVED hasta que pague su orden; sin pujas vuelve al catálogo.
+  // El `status: 'IN_AUCTION'` del where evita pisar un vehiculo que otro flujo ya haya movido.
   await tx.vehicle.updateMany({
     where: { id: auction.vehicleId, status: 'IN_AUCTION' },
-    data: { status: winnerId ? 'SOLD' : 'AVAILABLE' },
+    data: { status: winnerId ? 'RESERVED' : 'AVAILABLE' },
   });
+
+  const orderId =
+    winnerId && auction.currentBid !== null
+      ? await createAuctionOrderTx(tx, {
+          vehicleId: auction.vehicleId,
+          sellerId: auction.sellerId,
+          winnerId,
+          winningBid: Number(auction.currentBid),
+        })
+      : null;
 
   return {
     auctionId: auction.id,
@@ -97,6 +110,7 @@ export async function finalizeAuction(tx: Db, auctionId: string): Promise<Auctio
     status: 'FINISHED',
     winnerId,
     currentBid: auction.currentBid === null ? null : Number(auction.currentBid),
+    orderId,
   };
 }
 

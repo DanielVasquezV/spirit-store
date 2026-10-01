@@ -49,6 +49,8 @@ export interface AuctionClosedEvent {
    *  catalogo en vez de quedarse vendido. */
   winnerId: string | null;
   currentBid: number | null;
+  /** Orden que el ganador tiene que pagar para quedarse con el vehículo. */
+  orderId: string | null;
 }
 
 export interface AuctionRealtimeSink {

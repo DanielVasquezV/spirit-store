@@ -1,0 +1,15 @@
+packages:
+  - backend
+  - frontend
+
+# Expo y Metro resuelven mejor un node_modules plano que los symlinks aislados de pnpm.
+nodeLinker: hoisted
+
+# Solo estos paquetes pueden correr scripts de instalación (engines de Prisma, esbuild de tsx y el binario de bcrypt).
+allowBuilds:
+  prisma: true
+  '@prisma/engines': true
+  esbuild: true
+  bcrypt: true
+  unrs-resolver: false
+  '@scarf/scarf': false

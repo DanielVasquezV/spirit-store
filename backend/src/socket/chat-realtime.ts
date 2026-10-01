@@ -11,6 +11,8 @@
 
 export interface ChatMessageEvent {
   chatId: string;
+  /** El otro participante: recibe el aviso en su sala personal aunque no tenga el hilo abierto. */
+  recipientId: string;
   message: {
     id: string;
     chatId: string;

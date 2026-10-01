@@ -11,7 +11,7 @@ export interface CreateDiagnosticInput {
   symptoms?: unknown;
 }
 
-/** El cliente la consulta para no ofrecer el botón si falta la clave del modelo. */
+// El cliente la consulta para no ofrecer el botón si falta la clave del modelo.
 export function diagnosticsAvailable(): Promise<{ available: boolean }> {
   return http.get<{ available: boolean }>('/diagnostics/availability');
 }
@@ -28,8 +28,9 @@ export function getDiagnostic(id: string): Promise<AiDiagnosticDetailDto> {
   return http.get<AiDiagnosticDetailDto>(`/diagnostics/${id}`);
 }
 
-export function askDiagnostic(id: string, question: string): Promise<{ answer: string }> {
-  return http.post<{ answer: string }>(`/diagnostics/${id}/ask`, { question });
+// Devuelve la respuesta y el hilo actualizado, con las recomendaciones del catálogo ya resueltas.
+export function askDiagnostic(id: string, question: string): Promise<{ answer: string; diagnostic: AiDiagnosticDetailDto }> {
+  return http.post<{ answer: string; diagnostic: AiDiagnosticDetailDto }>(`/diagnostics/${id}/ask`, { question });
 }
 
 export function resolveDiagnostic(id: string, resolved: boolean): Promise<AiDiagnosticDto> {

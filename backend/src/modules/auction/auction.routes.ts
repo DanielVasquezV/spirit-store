@@ -17,6 +17,8 @@ router.post('/', requireAuth, loadUser, auctionController.create);
 //
 // ADMIN: dispara el cierre de subastas vencidas de todo el sistema, asi que no
 // puede ser un endpoint de usuario aunque no modifique datos del solicitante.
+// Antes que '/:id': 'mine' no es un UUID.
+router.get('/mine', requireAuth, loadUser, auctionController.listMine);
 router.post('/lifecycle', requireAuth, loadUser, requireRole('ADMIN'), auctionController.runLifecycle);
 
 router.get('/:id', auctionController.getOne);

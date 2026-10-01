@@ -43,9 +43,8 @@ export function ProductCard({
       ) : null}
 
       <View style={styles.stage}>
-        {/* Sin imagen asignada todavía: marcador en vez de romper el layout */}
         {imageUrl ? (
-          <Image source={{ uri: imageUrl }} style={styles.image} contentFit="contain" transition={200} />
+          <Image source={{ uri: imageUrl }} style={styles.image} contentFit="cover" transition={200} />
         ) : (
           <View style={styles.placeholder}>
             <Feather name="truck" size={40} color={Colors.borderStrong} />
@@ -82,12 +81,12 @@ const styles = StyleSheet.create({
   stage: {
     height: 170,
     backgroundColor: Colors.stageFrom,
-    borderRadius: Radius.xs,
+    borderRadius: Radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  image: { width: '80%', height: '80%' },
+  image: { width: '100%', height: '100%' },
   placeholder: { alignItems: 'center', gap: Spacing.sm },
   placeholderText: { ...Type.labelSm, color: Colors.textMuted },
   specs: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },

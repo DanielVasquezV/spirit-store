@@ -208,9 +208,15 @@ export const errorSchemas = {
             nullable: true,
             format: 'uri',
             description:
-              'Solo puede ser una URL de Cloudinary: cualquier otro host se rechaza con 400. Es el documento que acredita que el vendedor es el dueño.',
-            example: 'https://res.cloudinary.com/ykbpglzh/image/upload/v1/spiritapex/dui/x.jpg',
+              'Solo puede ser una URL pública del bucket de Supabase de la app: cualquier otro host se rechaza con 400. Cargarla verifica el DUI en el acto (proyecto de prueba, sin revisión manual).',
+            example: 'https://abcdefghij.supabase.co/storage/v1/object/public/spirit-store/spiritapex/dui/u/1790-x.jpg',
           },
+          duiStatus: {
+            type: 'string',
+            enum: ['NONE', 'PENDING', 'VERIFIED', 'REJECTED'],
+            description: 'Cargar `duiPhotoUrl` lo pasa a VERIFIED; quitarlo lo vuelve a NONE.',
+          },
+          duiVerifiedAt: { type: 'string', format: 'date-time', nullable: true },
         },
       },
     ],
@@ -274,7 +280,7 @@ export const errorSchemas = {
       fullName: { type: 'string', minLength: 3, example: 'Ana Test Actualizada' },
       phoneNumber: { type: 'string', description: 'Nuevo teléfono, mismo formato que en el registro.', example: '(11) 4321-1234' },
       phone: { type: 'string', description: 'Alias de `phoneNumber`.' },
-      duiPhotoUrl: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/ykbpglzh/image/upload/v1/spiritapex/dui/x.jpg' },
+      duiPhotoUrl: { type: 'string', format: 'uri', example: 'https://abcdefghij.supabase.co/storage/v1/object/public/spirit-store/spiritapex/dui/u/1790-x.jpg' },
       role: {
         type: 'string',
         enum: ['BUYER', 'SELLER'],
@@ -301,49 +307,23 @@ export const errorSchemas = {
     type: 'string',
     enum: ['vehicles', 'dui', 'chat', 'misc'],
     description:
-      'Destino del archivo. Decide la carpeta dentro de Cloudinary y es una lista blanca: cualquier otro valor se rechaza con 400, para que nadie pueda escribir rutas arbitrarias en el nombre del asset. Si se omite, es `misc`.',
-  },
-
-  SignedUploadParams: {
-    type: 'object',
-    required: ['timestamp', 'signature', 'apiKey', 'cloudName', 'folder', 'transformation'],
-    description:
-      'Credenciales de una sola subida directa. `apiSecret` **nunca** se devuelve: viaja solo la API key pública.',
-    properties: {
-      timestamp: { type: 'integer', description: 'Unix epoch en segundos.', example: 1790712099 },
-      signature: { type: 'string', description: 'HMAC de los parametros firmados.' },
-      apiKey: { type: 'string', description: 'API key pública de Cloudinary.', example: '193424885932522' },
-      cloudName: { type: 'string', example: 'ykbpglzh' },
-      folder: { type: 'string', description: 'Carpeta de destino ya resuelta.', example: 'spiritapex/vehicles' },
-      transformation: {
-        type: 'string',
-        description:
-          'Transformación a aplicar en la subida. Va serializada en un solo componente. La firma cubre exactamente este valor: si el cliente lo cambia, Cloudinary rechaza la subida con 400.',
-        example: 'c_limit,f_auto,h_2000,q_auto,w_2000',
-      },
-      expiresAt: {
-        type: 'integer',
-        description:
-          'Unix epoch. **Informativo**: la firma solo cubre `timestamp` y Cloudinary no la invalida por antigüedad, así que lo respeta el cliente por su cuenta.',
-        example: 1790712399,
-      },
-    },
+      'Destino del archivo. Decide la carpeta dentro del bucket y es una lista blanca: cualquier otro valor se rechaza con 400, para que nadie pueda escribir rutas arbitrarias en el nombre del asset. Si se omite, es `misc`.',
   },
 
   UploadedAsset: {
     type: 'object',
     required: ['url', 'publicId', 'width', 'height', 'bytes', 'format', 'resourceType'],
     description:
-      'Guardar el `publicId`, no la `url`. La URL puede llevar transformaciones y no permite derivar el asset de forma fiable; el `publicId` sí, y es lo que hace falta para borrar.',
+      'Guardar el `publicId` (ruta del objeto en el bucket): es lo que hace falta para borrarlo. La `url` es la pública del bucket.',
     properties: {
-      url: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/ykbpglzh/image/upload/v1/spiritapex/vehicles/u/1790-a3w6d5w0.png' },
+      url: { type: 'string', format: 'uri', example: 'https://abcdefghij.supabase.co/storage/v1/object/public/spirit-store/spiritapex/vehicles/u/1790-a3w6d5w0.jpg' },
       publicId: {
         type: 'string',
-        description: 'Identificador del asset, con la carpeta incluida. No lleva extensión: Cloudinary la agrega al servir.',
-        example: 'spiritapex/vehicles/4aebb21f-ecb5-46c8-8d88-783278512ae2/1790712099661-a3w6d5w0',
+        description: 'Ruta del objeto en el bucket, con la carpeta incluida.',
+        example: 'spiritapex/vehicles/4aebb21f-ecb5-46c8-8d88-783278512ae2/1790712099661-a3w6d5w0.jpg',
       },
-      width: { type: 'integer', nullable: true, example: 1 },
-      height: { type: 'integer', nullable: true, example: 1 },
+      width: { type: 'integer', nullable: true, description: 'Siempre null: Supabase no procesa la imagen.' },
+      height: { type: 'integer', nullable: true, description: 'Siempre null: Supabase no procesa la imagen.' },
       bytes: { type: 'integer', example: 95 },
       format: { type: 'string', example: 'png' },
       resourceType: { type: 'string', enum: ['image', 'raw', 'video'], example: 'image' },
@@ -393,8 +373,8 @@ export const errorSchemas = {
 
   AuctionStatus: {
     type: 'string',
-    enum: ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED'],
-    description: '`PENDING` es programada (empieza en el futuro); `ACTIVE` es la que la app muestra como "En vivo". `FINISHED` la cierra el timer cuando vence `endTime`, fijando el ganador; `CANCELLED` la marca el vendedor o un ADMIN. Las transiciones las hace el servidor, no el cliente.',
+    enum: ['PENDING', 'ACTIVE', 'FINISHED', 'CANCELLED', 'CLOSED'],
+    description: '`PENDING` es programada (empieza en el futuro); `ACTIVE` es la que la app muestra como "En vivo". `FINISHED` la cierra el timer cuando vence `endTime`, fijando el ganador y creando su orden; `CLOSED` es una FINISHED cuyo ganador no pagó (la orden venció o la canceló) y ahí termina; `CANCELLED` la marca el vendedor o un ADMIN. Las transiciones las hace el servidor, no el cliente.',
     example: 'ACTIVE',
   },
 
@@ -403,8 +383,8 @@ export const errorSchemas = {
     required: ['id', 'url', 'position'],
     properties: {
       id: { type: 'string', format: 'uuid' },
-      url: { type: 'string', format: 'uri', description: 'URL de Cloudinary, ya transformada. Solo se acepta un host de Cloudinary.' },
-      publicId: { type: 'string', nullable: true, description: 'Identificador del asset. Es lo que hace falta para borrarlo de Cloudinary.' },
+      url: { type: 'string', format: 'uri', description: 'URL pública de Supabase Storage. Solo se acepta el bucket de la app.' },
+      publicId: { type: 'string', nullable: true, description: 'Ruta del objeto en el bucket. Es lo que hace falta para borrarlo.' },
       position: { type: 'integer', description: 'Orden en la galería. 0 es la portada.' },
     },
   },
@@ -491,13 +471,13 @@ export const errorSchemas = {
       description: { type: 'string', maxLength: 2000 },
       images: {
         type: 'array',
-        description: 'Fotos ya subidas con `/api/uploads/sign`. Cada `url` debe ser de Cloudinary.',
+        description: 'Fotos ya subidas con `POST /api/uploads`. Cada `url` debe ser del bucket de la app.',
         items: {
           type: 'object',
           required: ['url'],
           properties: {
             url: { type: 'string', format: 'uri' },
-            publicId: { type: 'string', description: 'Se guarda para poder borrar el asset de Cloudinary después.' },
+            publicId: { type: 'string', description: 'Se guarda para poder borrar el objeto del bucket después.' },
           },
         },
       },
@@ -667,6 +647,31 @@ export const errorSchemas = {
     },
   },
 
+  AuctionHistoryItem: {
+    allOf: [
+      { $ref: '#/components/schemas/Auction' },
+      {
+        type: 'object',
+        required: ['myRole', 'myHighestBid', 'order'],
+        properties: {
+          myRole: { type: 'string', enum: ['SELLER', 'WINNER', 'BIDDER'], description: 'WINNER solo cuando terminó con el usuario como ganador.' },
+          myHighestBid: { type: 'number', nullable: true, description: 'Puja más alta del usuario; null si es el vendedor.' },
+          order: {
+            type: 'object',
+            nullable: true,
+            description: 'Orden que generó el cierre. Solo la ven el vendedor y el ganador.',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              status: { $ref: '#/components/schemas/OrderStatus' },
+              paymentStatus: { $ref: '#/components/schemas/PaymentStatus' },
+              buyerId: { type: 'string', format: 'uuid' },
+            },
+          },
+        },
+      },
+    ],
+  },
+
   CreateAuctionRequest: {
     type: 'object',
     required: ['vehicleId', 'startingPrice', 'endTime'],
@@ -732,7 +737,7 @@ export const errorSchemas = {
 
   ChatPreview: {
     type: 'object',
-    required: ['id', 'chatType', 'counterpart', 'unreadCount', 'createdAt', 'updatedAt'],
+    required: ['id', 'chatType', 'counterpart', 'viewerRole', 'unreadCount', 'createdAt', 'updatedAt'],
     description: [
       'Una conversación tal como aparece en la lista.',
       '',
@@ -759,6 +764,11 @@ export const errorSchemas = {
         type: 'object',
         required: ['id', 'fullName'],
         properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } },
+      },
+      viewerRole: {
+        type: 'string',
+        enum: ['BUYER', 'SELLER'],
+        description: 'Lado de quien consulta: el inbox agrupa en Compras (BUYER) y Ventas (SELLER).',
       },
       lastMessage: { nullable: true, allOf: [{ $ref: '#/components/schemas/ChatMessage' }] },
       unreadCount: { type: 'integer', description: 'Mensajes del otro sin leer.' },
@@ -819,7 +829,31 @@ export const errorSchemas = {
       sender: { type: 'string', enum: ['USER', 'AI_ASSISTANT'] },
       content: { type: 'string' },
       model: { type: 'string', nullable: true, description: 'Modelo que generó la respuesta. Permite auditar cada versión.' },
+      intent: {
+        type: 'string',
+        nullable: true,
+        enum: ['DIAGNOSIS', 'RECOMMENDATION', 'GENERAL', 'OFF_TOPIC'],
+        description: 'Qué entendió el asistente. Null en los turnos del usuario.',
+      },
+      recommendations: {
+        type: 'array',
+        description: 'Vehículos del catálogo propio que recomendó. Se resuelven al leer: un vehículo vendido deja de aparecer.',
+        items: { $ref: '#/components/schemas/RecommendedVehicle' },
+      },
       createdAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  RecommendedVehicle: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      title: { type: 'string', example: 'Toyota RAV4 Hybrid' },
+      year: { type: 'integer', example: 2023 },
+      basePrice: { type: 'number', example: 36900 },
+      saleType: { $ref: '#/components/schemas/SaleType' },
+      imageUrl: { type: 'string', nullable: true },
+      auctionId: { type: 'string', format: 'uuid', nullable: true, description: 'Subasta en vivo: la app abre la sala de pujas.' },
     },
   },
 
@@ -859,7 +893,7 @@ export const errorSchemas = {
     type: 'object',
     required: ['title'],
     description: [
-      'Crea un diagnóstico y pide el primer análisis a Gemini.',
+      'Abre una conversación con el asistente automotriz y pide la primera respuesta.',
       '',
       'La fila se guarda **antes** de llamar al modelo: si la llamada falla, el',
       'usuario conserva la pregunta y puede reintentar sin volver a escribirla.',
@@ -886,8 +920,29 @@ export const errorSchemas = {
 
   DiagnosticAnswer: {
     type: 'object',
-    required: ['answer'],
-    properties: { answer: { type: 'string' } },
+    required: ['answer', 'diagnostic'],
+    properties: {
+      answer: { type: 'string' },
+      diagnostic: { $ref: '#/components/schemas/AiDiagnosticDetail' },
+    },
+  },
+
+  ConfirmPaymentRequest: {
+    type: 'object',
+    required: ['paymentMethod'],
+    properties: {
+      paymentMethod: { type: 'string', enum: ['CARD', 'BANK_TRANSFER'] },
+      card: {
+        type: 'object',
+        description: 'Obligatorio con CARD. Solo datos mostrables: nunca el número completo ni el CVV.',
+        properties: {
+          brand: { type: 'string', example: 'visa' },
+          last4: { type: 'string', example: '4242' },
+          holderName: { type: 'string', example: 'Carlos Menjívar' },
+        },
+      },
+      transferReference: { type: 'string', description: 'Obligatorio con BANK_TRANSFER.', example: 'BAC-778812' },
+    },
   },
 
   DiagnosticAvailability: {
@@ -895,5 +950,81 @@ export const errorSchemas = {
     required: ['available'],
     description: 'Permite que la app esconda la función si el servidor no tiene key, en vez de fallar al tocarla.',
     properties: { available: { type: 'boolean' } },
+  },
+
+  OrderStatus: { type: 'string', enum: ['PENDING_PAYMENT', 'PAID', 'FAILED', 'CANCELLED', 'REFUNDED'] },
+  PaymentStatus: { type: 'string', enum: ['PENDING', 'COMPLETED', 'FAILED', 'REFUNDED'] },
+
+  Order: {
+    type: 'object',
+    required: [
+      'id', 'orderNumber', 'vehicleId', 'buyerId', 'sellerId', 'buyer', 'seller', 'vehicle',
+      'subtotal', 'taxRate', 'taxAmount', 'totalAmount', 'currency', 'status', 'paymentStatus', 'createdAt', 'updatedAt',
+    ],
+    description: 'Subtotal, IVA y total los calcula el servidor (half-even a centavos). El cliente solo los muestra.',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      orderNumber: { type: 'string', example: 'ORD-2026-A1B2C3' },
+      vehicleId: { type: 'string', format: 'uuid' },
+      buyerId: { type: 'string', format: 'uuid' },
+      sellerId: { type: 'string', format: 'uuid' },
+      buyer: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+      seller: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } } },
+      vehicle: {
+        type: 'object',
+        properties: { id: { type: 'string', format: 'uuid' }, title: { type: 'string' }, year: { type: 'integer' }, imageUrl: { type: 'string', nullable: true } },
+      },
+      subtotal: { type: 'number', example: 42900 },
+      taxRate: { type: 'number', example: 0.13 },
+      taxAmount: { type: 'number', example: 5577 },
+      totalAmount: { type: 'number', example: 48477 },
+      currency: { type: 'string', example: 'USD' },
+      origin: { type: 'string', enum: ['DIRECT_SALE', 'AUCTION'], description: 'AUCTION: la creó el cierre de una subasta ganada.' },
+      status: { $ref: '#/components/schemas/OrderStatus' },
+      paymentStatus: { $ref: '#/components/schemas/PaymentStatus' },
+      paymentMethod: { type: 'string', enum: ['CARD', 'BANK_TRANSFER'], nullable: true },
+      paymentReference: { type: 'string', nullable: true, example: 'VISA •••• 4242' },
+      expiresAt: { type: 'string', format: 'date-time', nullable: true, description: 'Límite para pagar antes de que se libere el vehículo.' },
+      completedAt: { type: 'string', format: 'date-time', nullable: true },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  CreateOrderRequest: {
+    type: 'object',
+    required: ['vehicleId'],
+    properties: {
+      vehicleId: { type: 'string', format: 'uuid' },
+      expectedVehiclePrice: {
+        type: 'number',
+        description: 'Precio que vio el cliente. Si el vendedor lo cambió, responde 409 con `currentPrice` en vez de cobrar otra cifra.',
+      },
+      chatId: { type: 'string', format: 'uuid', description: 'Conversación que originó la compra; queda enlazada a la orden.' },
+    },
+  },
+
+  CheckoutSession: {
+    type: 'object',
+    required: ['clientSecret', 'orderId', 'orderNumber', 'amount', 'currency', 'mode'],
+    description: 'Pago simulado: no hay pasarela real detrás. `mode: mock` le indica a la app que confirme con `/orders/{id}/confirm`.',
+    properties: {
+      clientSecret: { type: 'string' },
+      orderId: { type: 'string', format: 'uuid' },
+      orderNumber: { type: 'string' },
+      amount: { type: 'number' },
+      currency: { type: 'string' },
+      expiresAt: { type: 'string', format: 'date-time', nullable: true },
+      mode: { type: 'string', enum: ['mock'] },
+    },
+  },
+
+  Taxonomies: {
+    type: 'object',
+    description: 'Enums del catálogo con su etiqueta en español. Cada lista es `{ value, label }[]`.',
+    additionalProperties: {
+      type: 'array',
+      items: { type: 'object', properties: { value: { type: 'string' }, label: { type: 'string' } } },
+    },
   },
 } as const;

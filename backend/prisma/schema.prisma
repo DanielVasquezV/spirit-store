@@ -124,6 +124,8 @@ enum AuctionStatus {
   ACTIVE
   FINISHED
   CANCELLED
+  /// Terminó con ganador pero la orden no se pagó (venció o la cancelaron): la subasta queda cerrada sin venta.
+  CLOSED
 }
 
 enum DiagnosticSeverity {
@@ -233,8 +235,8 @@ model Vehicle {
   seller      User              @relation(fields: [sellerId], references: [id], onDelete: Restrict)
   // 1:N - galeria
   images      VehicleImage[]
-  // 1:1 - como mucho una orden de compra directa por vehiculo
-  order       Order?
+  // 1:N - historial de ordenes; solo una puede estar activa (indice unico parcial en la migracion)
+  orders      Order[]
   // 1:1 - como mucho una subasta por vehiculo
   auction     Auction?
   // 1:N - conversaciones que referencian este vehiculo
@@ -255,7 +257,7 @@ model VehicleImage {
   id        String   @id @default(uuid()) @db.Uuid
   vehicleId String   @db.Uuid
   url       String
-  /// Identificador del asset en Cloudinary. Se guarda aparte de la url porque
+  /// Ruta del objeto en Supabase Storage. Se guarda aparte de la url porque
   /// es lo unico con lo que se puede derivar el recurso para borrarlo: la url
   /// puede llevar transformaciones y no sirve para reconstruirlo.
   publicId  String?
@@ -292,6 +294,18 @@ model VehicleFavorite {
 // Ventas directas: ORDERS
 // ---------------------------------------------------------------------------
 
+/// Medio de pago simulado. No hay pasarela real: el proyecto es academico.
+enum PaymentMethod {
+  CARD
+  BANK_TRANSFER
+}
+
+/// De donde nace la orden: compra directa desde la ficha o cierre de una subasta ganada.
+enum OrderOrigin {
+  DIRECT_SALE
+  AUCTION
+}
+
 enum OrderStatus {
   PENDING_PAYMENT
   PAID
@@ -302,7 +316,9 @@ enum OrderStatus {
 
 model Order {
   id               String        @id @default(uuid()) @db.Uuid
-  vehicleId        String        @unique @db.Uuid
+  /// Sin @unique: una orden cancelada o expirada no puede bloquear para siempre el vehiculo. La regla
+  /// "una orden activa por vehiculo" la impone el indice unico parcial orders_active_vehicle_key.
+  vehicleId        String        @db.Uuid
   buyerId          String        @db.Uuid
   sellerId         String        @db.Uuid
   /// Numero legible de la orden (ORD-2026-000123). Unico para soporte.
@@ -322,6 +338,12 @@ model Order {
   /// Sesion de pago creada por checkout-session. Es unica por orden porque solo
   /// puede haber una PaymentIntent viva a la vez.
   gatewaySessionId String?       @unique
+  origin           OrderOrigin   @default(DIRECT_SALE)
+  paymentMethod    PaymentMethod?
+  /// Lo que se puede mostrar del pago: "VISA •••• 4242" o la referencia de la transferencia. Nunca el numero completo.
+  paymentReference String?
+  /// Limite para pagar; vencido, el job cancela la orden y libera el vehiculo.
+  expiresAt        DateTime?     @db.Timestamptz(3)
   completedAt      DateTime?     @db.Timestamptz(3)
   createdAt        DateTime      @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime      @updatedAt @db.Timestamptz(3)
@@ -331,10 +353,12 @@ model Order {
   seller  User    @relation("OrderSeller", fields: [sellerId], references: [id], onDelete: Restrict)
   chat    Chat?
 
+  @@index([vehicleId])
   @@index([buyerId])
   @@index([sellerId])
   @@index([status])
   @@index([paymentStatus])
+  @@index([status, expiresAt])
   @@map("orders")
 }
 
@@ -484,11 +508,13 @@ model AiDiagnosticMessage {
   diagnosticId   String           @db.Uuid
   sender         DiagnosticSender
   content        String
-  /// Modelo que genero la respuesta (p. ej. `gemini-2.0-flash`). Permite
+  /// Modelo que genero la respuesta (p. ej. `openai/gpt-oss-120b`). Permite
   /// auditar que respuestas produjo cada version del modelo.
   model          String?
-  /// Prompt completo enviado a Gemini, para reproducir el diagnostico.
+  /// Turno del usuario que respondio el modelo, para reproducir la respuesta.
   promptSnapshot String?
+  /// Intencion detectada y ids de vehiculos del catalogo recomendados en esta respuesta.
+  metadata       Json?
   createdAt      DateTime         @default(now()) @db.Timestamptz(3)
 
   diagnostic AiDiagnostic @relation(fields: [diagnosticId], references: [id], onDelete: Cascade)

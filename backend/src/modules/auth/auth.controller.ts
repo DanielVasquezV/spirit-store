@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 
+import { isOwnStorageUrl } from '../../config/storage.js';
 import { AppError, asyncHandler } from '../../middleware/error-handler.js';
 import { created, ok } from '../../lib/api-response.js';
 import {
@@ -95,10 +96,10 @@ export const updateMe = asyncHandler(async (req: Request, res: Response) => {
     if (phoneError) validator.add('phone', phoneError);
   }
 
-  // Solo URLs de Cloudinary: evita apuntar el DUI a un host arbitrario.
+  // Solo URLs del bucket propio: evita apuntar el DUI a un host arbitrario.
   const duiPhotoUrl = readString(body, 'duiPhotoUrl');
-  if (duiPhotoUrl && !/^https:\/\/[a-z0-9-]+\.cloudinary\.com\//i.test(duiPhotoUrl)) {
-    validator.add('duiPhotoUrl', 'La URL del DUI debe venir de Cloudinary');
+  if (duiPhotoUrl && !isOwnStorageUrl(duiPhotoUrl)) {
+    validator.add('duiPhotoUrl', 'La URL del DUI debe venir del almacenamiento de la app');
   }
 
   // Solo BUYER y SELLER: el usuario elige si compra, vende o ambas. ADMIN queda

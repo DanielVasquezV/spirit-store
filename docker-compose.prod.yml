@@ -26,6 +26,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # JWT, Groq y Supabase salen del .env de la raiz; abajo solo se pisa lo que cambia dentro de Docker.
+    env_file: .env
     environment:
       NODE_ENV: production
       PORT: 4000
@@ -39,7 +41,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-http://localhost:4000}
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL:-http://localhost:8081}
     restart: unless-stopped
     depends_on:
       - api

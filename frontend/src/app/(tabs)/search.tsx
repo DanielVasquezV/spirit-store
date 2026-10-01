@@ -1,100 +1,95 @@
-import { router } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import Feather from '@expo/vector-icons/Feather';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FilterBottomSheet, DEFAULT_FILTERS, type Filters } from '@/components/filter-bottom-sheet';
-import { ProductCard } from '@/components/product-card';
+import { FlatList, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FilterBottomSheet } from '@/components/filter-bottom-sheet';
 import { SearchBar } from '@/components/search-bar';
+import { ListFooterSkeleton, ListSkeleton, StateView } from '@/components/state-view';
+import { VehicleCard } from '@/components/vehicle-card';
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { SectionHeader } from '@/components/ui/section-header';
-import { Colors, Layout, Spacing, Type } from '@/constants/theme';
-import { CATEGORIES, MOCK_VEHICLES, saleBadges, vehicleSpecs } from '@/lib/mock-data';
-import { applySearch } from '@/lib/search';
+import { Colors, Layout, Spacing } from '@/constants/theme';
+import { useCatalogSearch } from '@/features/catalog/use-catalog-filters';
+import { CATEGORY_OPTIONS } from '@/lib/taxonomy';
+
+const CATEGORY_CHIPS = [{ value: 'all' as const, label: 'Todo' }, ...CATEGORY_OPTIONS];
 
 export default function SearchScreen() {
   const insets = useSafeAreaInsets();
-  const [query, setQuery] = useState('');
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const params = useLocalSearchParams<{ q?: string; category?: string }>();
+  const { query, setQuery, filters, updateFilter, resetFilters, filtered, searching, search, results, total } = useCatalogSearch(params);
   const [sheetVisible, setSheetVisible] = useState(false);
 
-  const results = applySearch(MOCK_VEHICLES, query, filters);
-  const hasActiveFilters =
-    filters.price !== 'all' || filters.category !== 'all' || filters.transmission !== 'all' || filters.fuel !== 'Todos';
+  const header = (
+    <View>
+      <View style={styles.search}>
+        <SearchBar value={query} onSearch={setQuery} onFilterPress={() => setSheetVisible(true)} />
+      </View>
 
-  const updateFilter = (update: Partial<Filters>) => setFilters((current) => ({ ...current, ...update }));
-  const resetFilters = () => setFilters(DEFAULT_FILTERS);
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+        {CATEGORY_CHIPS.map((category) => (
+          <Chip
+            key={category.value}
+            label={category.label}
+            selected={filters.category === category.value}
+            onPress={() => updateFilter({ category: category.value })}
+          />
+        ))}
+      </ScrollView>
+
+      <View style={styles.results}>
+        <SectionHeader title={searching ? 'Resultados' : 'Catálogo'} count={`${total} ${total === 1 ? 'VEHÍCULO' : 'VEHÍCULOS'}`} />
+        {filtered ? <Button label="Limpiar filtros" variant="ghost" size="sm" onPress={resetFilters} /> : null}
+      </View>
+    </View>
+  );
+
+  const empty = search.isPending ? (
+    <ListSkeleton />
+  ) : search.isError ? (
+    <StateView icon="wifi-off" title="No pudimos buscar" body="Revisá tu conexión e intentá de nuevo." actionLabel="Reintentar" onAction={() => void search.refetch()} />
+  ) : (
+    <StateView
+      icon="search"
+      title="Sin resultados"
+      body={searching ? 'Probá con otra marca, modelo o limpiá los filtros.' : 'No hay vehículos registrados todavía.'}
+      actionLabel={filtered ? 'Limpiar filtros' : undefined}
+      onAction={resetFilters}
+    />
+  );
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader title="Buscar" />
-      <ScrollView
+      <FlatList
+        data={results}
+        keyExtractor={(vehicle) => vehicle.id}
+        renderItem={({ item }) => <VehicleCard vehicle={item} />}
+        ListHeaderComponent={header}
+        ListEmptyComponent={empty}
+        ListFooterComponent={<ListFooterSkeleton visible={search.isFetchingNextPage} />}
+        onEndReached={() => {
+          if (search.hasNextPage && !search.isFetchingNextPage) void search.fetchNextPage();
+        }}
+        onEndReachedThreshold={0.5}
         contentContainerStyle={[styles.content, { paddingBottom: 104 + insets.bottom }]}
+        ItemSeparatorComponent={() => <View style={styles.separator} />}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag">
-        <View style={styles.search}>
-          <SearchBar
-            onSearch={setQuery}
-            onFilterPress={() => setSheetVisible(true)}
-          />
-        </View>
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chips}>
-          {CATEGORIES.map((category) => (
-            <Chip
-              key={category.id}
-              label={category.label}
-              selected={filters.category === category.id}
-              onPress={() => updateFilter({ category: category.id })}
-            />
-          ))}
-        </ScrollView>
-
-        <View style={styles.results}>
-          <SectionHeader title={query || hasActiveFilters ? 'Resultados' : 'Catálogo'} count={`${results.length} ${results.length === 1 ? 'VEHÍCULO' : 'VEHÍCULOS'}`} />
-          {hasActiveFilters ? <Button label="Limpiar filtros" variant="ghost" size="sm" onPress={resetFilters} /> : null}
-        </View>
-
-        {results.length > 0 ? (
-          <View style={styles.products}>
-            {results.map((product) => (
-              <ProductCard
-                key={product.id}
-                title={product.title}
-                price={product.price}
-                badges={saleBadges(product.saleType)}
-                specs={vehicleSpecs(product)}
-                onPress={() => router.push(`/product/${product.id}`)}
-              />
-            ))}
-          </View>
-        ) : (
-          <View style={styles.empty}>
-            <Feather name="search" size={40} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>Sin resultados</Text>
-            <Text style={styles.emptyHint}>
-              {query || hasActiveFilters ? 'Probá con otra marca, modelo o limpiá los filtros.' : 'No hay vehículos registrados todavía.'}
-            </Text>
-            {query || hasActiveFilters ? <Button label="Limpiar búsqueda" variant="secondary" size="sm" onPress={() => { setQuery(''); resetFilters(); }} /> : null}
-          </View>
-        )}
-      </ScrollView>
+        keyboardDismissMode="on-drag"
+      />
 
       <FilterBottomSheet
         visible={sheetVisible}
         filters={filters}
-        isActive={hasActiveFilters}
+        isActive={filtered}
         onChange={updateFilter}
         onReset={resetFilters}
         onClose={() => setSheetVisible(false)}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -104,8 +99,5 @@ const styles = StyleSheet.create({
   search: { paddingTop: Spacing.md },
   chips: { paddingTop: Spacing.lg, gap: Spacing.sm, paddingRight: Layout.screenX },
   results: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: Spacing.xl, marginBottom: Spacing.lg },
-  products: { gap: Layout.gap },
-  empty: { alignItems: 'center', gap: Spacing.md, paddingVertical: Spacing.huge, paddingHorizontal: Layout.screenX },
-  emptyTitle: { ...Type.h3, color: Colors.text },
-  emptyHint: { ...Type.body, color: Colors.textMuted, textAlign: 'center' },
+  separator: { height: Layout.gap },
 });

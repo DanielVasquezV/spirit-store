@@ -36,8 +36,37 @@ export const createCheckoutSession = asyncHandler(async (req: Request, res: Resp
   created(res, session);
 });
 
+// Del medio de pago solo viaja lo que se puede mostrar en el comprobante: nunca el número completo ni el CVV.
+function readPayment(body: Record<string, unknown>): orderService.PaymentInput {
+  const validator = new Validator();
+  const method = body['paymentMethod'];
+  if (method === 'CARD') {
+    const card = (body['card'] ?? {}) as Record<string, unknown>;
+    const last4 = typeof card['last4'] === 'string' ? card['last4'] : '';
+    const brand = typeof card['brand'] === 'string' ? card['brand'].trim() : '';
+    const holderName = typeof card['holderName'] === 'string' ? card['holderName'].trim() : '';
+    if (!/^\d{4}$/.test(last4)) validator.add('card.last4', 'card.last4 debe tener 4 digitos');
+    if (!brand || brand.length > 20) validator.add('card.brand', 'card.brand es obligatorio');
+    if (holderName.length < 3 || holderName.length > 80) validator.add('card.holderName', 'Escribi el nombre como aparece en la tarjeta');
+    validator.assert();
+    return { method: 'CARD', card: { last4, brand, holderName } };
+  }
+  if (method === 'BANK_TRANSFER') {
+    const reference = typeof body['transferReference'] === 'string' ? body['transferReference'].trim() : '';
+    if (!/^[A-Za-z0-9-]{4,30}$/.test(reference)) {
+      validator.add('transferReference', 'La referencia debe tener entre 4 y 30 letras o numeros');
+    }
+    validator.assert();
+    return { method: 'BANK_TRANSFER', transferReference: reference.toUpperCase() };
+  }
+  validator.add('paymentMethod', 'paymentMethod debe ser CARD o BANK_TRANSFER');
+  validator.assert();
+  throw AppError.badRequest('Validation failed');
+}
+
 export const confirm = asyncHandler(async (req: Request, res: Response) => {
-  const order = await orderService.confirmPayment(req.user!.id, requireUuid(String(req.params.id)));
+  const payment = readPayment((req.body ?? {}) as Record<string, unknown>);
+  const order = await orderService.confirmPayment(req.user!.id, requireUuid(String(req.params.id)), payment);
   ok(res, order);
 });
 

@@ -1,16 +1,16 @@
-import { Redirect, Tabs } from 'expo-router';
+import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { FloatingTabBar } from '@/components/ui/floating-tab-bar';
 import { useSession } from '@/features/auth/session-provider';
+import { useRealtimeSync } from '@/features/realtime/use-realtime-sync';
 import { Colors } from '@/constants/theme';
 
 export default function TabLayout() {
   const { status } = useSession();
+  useRealtimeSync(status === 'authenticated');
 
-  // Sin sesión resuelta no se decide destino: entrar y rebotar a /login dejaría
-  // fuera a un usuario que sí tiene token válido.
+  // Sin sesión resuelta no se decide destino: rebotar a /login dejaría fuera a quien sí tiene token.
   if (status === 'loading') return <View style={styles.blank} />;
-  if (status === 'anonymous') return <Redirect href="/login" />;
 
   return (
     <Tabs

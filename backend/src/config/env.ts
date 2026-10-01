@@ -77,19 +77,22 @@ export const env = {
     saltRounds: toInt('BCRYPT_SALT_ROUNDS', process.env.BCRYPT_SALT_ROUNDS, 12),
   },
 
-  gemini: {
-    apiKey: optional('GEMINI_API_KEY', process.env.GEMINI_API_KEY),
-    model: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
+  ai: {
+    // Groq por defecto, pero cualquier API compatible con OpenAI sirve (DeepSeek, OpenRouter) cambiando la URL.
+    apiKey: optional('GROQ_API_KEY', process.env.GROQ_API_KEY),
+    baseUrl: process.env.AI_BASE_URL ?? 'https://api.groq.com/openai/v1',
+    model: process.env.AI_MODEL ?? 'openai/gpt-oss-120b',
   },
 
-  cloudinary: {
-    // Aislar el media de la app permite borrarla entera sin tocar otras
-    // carpetas del mismo plan de Cloudinary.
-    folder: process.env.CLOUDINARY_FOLDER ?? 'spiritapex',
-    // Las fotos del móvil rara vez pasan de 8 MB, y multer las mantiene en
-    // memoria: el corte evita que un archivo grande agote la RAM del proceso.
-    maxFileSizeBytes:
-      toInt('CLOUDINARY_MAX_FILE_SIZE_MB', process.env.CLOUDINARY_MAX_FILE_SIZE_MB, 8) * 1024 * 1024,
+  storage: {
+    // URL del proyecto (https://<ref>.supabase.co) y la clave service_role: solo vive en el backend.
+    url: optional('SUPABASE_URL', process.env.SUPABASE_URL)?.replace(/\/+$/, ''),
+    serviceKey: optional('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY),
+    bucket: process.env.SUPABASE_STORAGE_BUCKET ?? 'spirit-store',
+    // Aislar el media de la app permite borrarla entera sin tocar otros archivos del bucket.
+    folder: process.env.STORAGE_FOLDER ?? 'spiritapex',
+    // multer mantiene el archivo en memoria: el corte evita que uno grande agote la RAM del proceso.
+    maxFileSizeBytes: toInt('UPLOAD_MAX_FILE_SIZE_MB', process.env.UPLOAD_MAX_FILE_SIZE_MB, 8) * 1024 * 1024,
   },
 
   // En producción solo si se pide a mano: la UI deja disparar llamadas reales
@@ -107,5 +110,7 @@ export const env = {
     // Sin esto, un vehiculo reservado se bloquea para siempre si el cliente
     // abandona el checkout.
     paymentExpiryMinutes: toInt('ORDER_EXPIRY_MINUTES', process.env.ORDER_EXPIRY_MINUTES, 30),
+    // El ganador de una subasta puede no estar conectado al cierre: tiene más margen que una compra directa.
+    auctionPaymentHours: toInt('AUCTION_ORDER_EXPIRY_HOURS', process.env.AUCTION_ORDER_EXPIRY_HOURS, 48),
   },
 } as const;

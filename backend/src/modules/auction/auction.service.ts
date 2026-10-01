@@ -255,3 +255,91 @@ export async function cancelAuction(id: string, requester: Requester): Promise<v
     });
   });
 }
+
+// Registro de subastas del usuario: las que creó y en las que participó.
+
+export type AuctionHistoryRole = 'SELLER' | 'WINNER' | 'BIDDER';
+
+export interface AuctionHistoryItemDto extends AuctionDto {
+  // Rol del usuario en esta subasta. WINNER solo cuando ya terminó con él como ganador.
+  myRole: AuctionHistoryRole;
+  // Puja más alta del usuario; null si es el vendedor.
+  myHighestBid: number | null;
+  // Orden que generó el cierre con ganador, para mostrar si se pagó o venció.
+  order: { id: string; status: string; paymentStatus: string; buyerId: string } | null;
+}
+
+export interface AuctionHistoryFilters {
+  role?: 'seller' | 'winner' | 'bidder';
+  status?: AuctionStatus;
+  q?: string;
+}
+
+const ENDED: AuctionStatus[] = ['FINISHED', 'CLOSED'];
+
+// Misma normalización que el searchText de vehículos: el texto de búsqueda llega ya en minúsculas y sin acentos.
+function normalizeQuery(q: string): string {
+  return q.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+}
+
+function historyWhere(userId: string, filters: AuctionHistoryFilters): Prisma.AuctionWhereInput {
+  const asSeller: Prisma.AuctionWhereInput = { sellerId: userId };
+  const asWinner: Prisma.AuctionWhereInput = { currentWinnerId: userId, status: { in: ENDED } };
+  const asBidder: Prisma.AuctionWhereInput = { bids: { some: { bidderId: userId } } };
+  const byRole =
+    filters.role === 'seller' ? asSeller : filters.role === 'winner' ? asWinner : filters.role === 'bidder' ? asBidder : { OR: [asSeller, asBidder] };
+
+  return {
+    AND: [
+      byRole,
+      filters.status ? { status: filters.status } : {},
+      filters.q ? { vehicle: { searchText: { contains: normalizeQuery(filters.q) } } } : {},
+    ],
+  };
+}
+
+export async function listMyAuctions(
+  userId: string,
+  filters: AuctionHistoryFilters,
+  page: { skip: number; take: number },
+): Promise<{ rows: AuctionHistoryItemDto[]; total: number }> {
+  const where = historyWhere(userId, filters);
+  const [total, rows] = await prisma.$transaction([
+    prisma.auction.count({ where }),
+    // El registro se lee de lo más reciente a lo más viejo, al revés del listado en vivo.
+    prisma.auction.findMany({ where, include: AUCTION_INCLUDE, orderBy: { endTime: 'desc' }, skip: page.skip, take: page.take }),
+  ]);
+  if (rows.length === 0) return { rows: [], total };
+
+  const auctionIds = rows.map((row) => row.id);
+  const vehicleIds = rows.map((row) => row.vehicleId);
+  const [myBids, orders] = await Promise.all([
+    prisma.bid.groupBy({ by: ['auctionId'], where: { auctionId: { in: auctionIds }, bidderId: userId }, _max: { amount: true } }),
+    prisma.order.findMany({
+      where: { vehicleId: { in: vehicleIds }, origin: 'AUCTION' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, vehicleId: true, status: true, paymentStatus: true, buyerId: true },
+    }),
+  ]);
+  const highest = new Map(myBids.map((bid) => [bid.auctionId, bid._max.amount === null ? null : Number(bid._max.amount)]));
+  // Una por vehículo: la más reciente es la del cierre de esta subasta.
+  const orderByVehicle = new Map<string, (typeof orders)[number]>();
+  for (const order of orders) if (!orderByVehicle.has(order.vehicleId)) orderByVehicle.set(order.vehicleId, order);
+
+  return {
+    total,
+    rows: rows.map((row) => {
+      const myRole: AuctionHistoryRole =
+        row.sellerId === userId ? 'SELLER' : row.currentWinnerId === userId && ENDED.includes(row.status) ? 'WINNER' : 'BIDDER';
+      const order = orderByVehicle.get(row.vehicleId) ?? null;
+      // La orden solo la ven sus partes: un postor que perdió no tiene por qué ver el pago del ganador.
+      const visibleOrder = order && (myRole !== 'BIDDER' || order.buyerId === userId) ? order : null;
+      return {
+        ...toAuctionDto(row),
+        myRole,
+        myHighestBid: myRole === 'SELLER' ? null : (highest.get(row.id) ?? null),
+        order: visibleOrder,
+      };
+    }),
+  };
+}

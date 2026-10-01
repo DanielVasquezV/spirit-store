@@ -95,9 +95,9 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
   // durante el arranque no debe quedarse sin emitir.
   setRealtimeSink({
     chatMessage: (event) => {
-      // A la sala del chat: los dos participantes ya estan adentro, asi que
-      // llega a ambos sin duplicar por salas personales.
-      io.to(SOCKET_ROOMS.chat(event.chatId)).emit(SOCKET_EVENTS.chat.message, event);
+      // Sala del chat + sala personal del destinatario: nadie entra a la del chat hasta abrir el hilo,
+      // y sin la personal el inbox y el badge no se enteran. Socket.IO no duplica si está en ambas.
+      io.to([SOCKET_ROOMS.chat(event.chatId), SOCKET_ROOMS.user(event.recipientId)]).emit(SOCKET_EVENTS.chat.message, event);
     },
     chatMessagesRead: (event) => {
       io.to(SOCKET_ROOMS.chat(event.chatId)).emit(SOCKET_EVENTS.chat.read, event);

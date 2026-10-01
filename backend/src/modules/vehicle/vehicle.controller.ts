@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 
+import { isOwnStorageUrl } from '../../config/storage.js';
 import { AppError, asyncHandler } from '../../middleware/error-handler.js';
 import { created, noContent, ok, paginated } from '../../lib/api-response.js';
 import {
@@ -31,7 +32,6 @@ const ALLOWED = {
   status: Object.values(VehicleStatus),
 } as const;
 
-const CLOUDINARY_URL_RE = /^https:\/\/[a-z0-9-]+\.cloudinary\.com\//i;
 
 // El id y el rol salen del token; el DUI es la unica credencial extra que se
 // necesita para autorizar la publicacion.
@@ -134,9 +134,8 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     validator.add('description', 'description no puede superar 2000 caracteres');
   }
 
-  // Imagenes: se suben antes con /uploads/sign y aca solo se referencian. La URL
-  // tiene que ser de Cloudinary para que no se pueda apuntar la ficha a un host
-  // ajeno que despues cambie de contenido.
+  // Imagenes: se suben antes con POST /uploads y aca solo se referencian. La URL tiene que ser del
+  // bucket propio para que no se pueda apuntar la ficha a un host ajeno que despues cambie de contenido.
   const images: VehicleImageInput[] = [];
   if (body['images'] !== undefined) {
     if (!Array.isArray(body['images'])) {
@@ -149,8 +148,8 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
         }
         const item = raw as Record<string, unknown>;
         const url = typeof item['url'] === 'string' ? item['url'].trim() : '';
-        if (!url || !CLOUDINARY_URL_RE.test(url)) {
-          validator.add(`images[${index}].url`, 'La imagen debe venir de Cloudinary');
+        if (!url || !isOwnStorageUrl(url)) {
+          validator.add(`images[${index}].url`, 'La imagen debe venir del almacenamiento de la app');
           return;
         }
         const publicId = typeof item['publicId'] === 'string' ? item['publicId'].trim() : undefined;
@@ -409,8 +408,8 @@ export const addImage = asyncHandler(async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
   const url = typeof body['url'] === 'string' ? body['url'].trim() : '';
   if (!url) throw AppError.badRequest("Falta el campo 'url'", { url: 'url es obligatorio' });
-  if (!CLOUDINARY_URL_RE.test(url)) {
-    throw AppError.badRequest('La imagen debe venir de Cloudinary', { url: 'La imagen debe venir de Cloudinary' });
+  if (!isOwnStorageUrl(url)) {
+    throw AppError.badRequest('La imagen debe venir del almacenamiento de la app', { url: 'La imagen debe venir del almacenamiento de la app' });
   }
   const publicId = typeof body['publicId'] === 'string' ? body['publicId'].trim() : undefined;
   const position = readInteger(body, 'position');

@@ -3,8 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 
 const KEY = 'spirit-store.access-token';
 
-// SecureStore no existe en web, así que el export estático guarda el token en
-// localStorage: mismo contrato de API para que el cliente no tenga que branching.
+// SecureStore no existe en web: ahí se usa localStorage con el mismo contrato para no ramificar el cliente.
 const storage = {
   get: () => (Platform.OS === 'web' ? localStorage.getItem(KEY) : SecureStore.getItemAsync(KEY)),
   set: (token: string) => (Platform.OS === 'web' ? localStorage.setItem(KEY, token) : SecureStore.setItemAsync(KEY, token)),

@@ -16,6 +16,7 @@ export interface LoginInput {
 export interface UpdateProfileInput {
   fullName?: string;
   phoneNumber?: string | null;
+  duiPhotoUrl?: string | null;
 }
 
 export function register(input: RegisterInput): Promise<AuthResult> {

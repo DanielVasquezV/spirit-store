@@ -1,71 +1,106 @@
-import { router } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback } from 'react';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import { SignInPrompt } from '@/components/sign-in-prompt';
+import { StateView } from '@/components/state-view';
 import { Avatar } from '@/components/ui/avatar';
 import { ScreenHeader } from '@/components/ui/screen-header';
 import { SectionHeader } from '@/components/ui/section-header';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Colors, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { CHAT_THREADS, getProductById } from '@/lib/mock-data';
+import { useRequireAuth } from '@/features/auth/use-require-auth';
+import { useInbox } from '@/features/chats/use-chats';
+import { formatChatTime } from '@/lib/format';
+import type { ChatPreviewDto } from '@/lib/types/api';
 
 export default function ChatsScreen() {
   const insets = useSafeAreaInsets();
-  const buys = CHAT_THREADS.filter((thread) => thread.type === 'buy');
-  const sells = CHAT_THREADS.filter((thread) => thread.type === 'sell');
+  const { isGuest } = useRequireAuth();
+  const { chats, threads, buys, sells } = useInbox(!isGuest);
 
-  const renderRow = (threadId: string) => {
-    const thread = CHAT_THREADS.find((item) => item.id === threadId);
-    if (!thread) return null;
-    const product = getProductById(thread.vehicleId);
-    const last = thread.messages[thread.messages.length - 1];
+  // Al volver de un hilo los contadores de no leídos cambiaron: se refresca al enfocar la pestaña.
+  useFocusEffect(
+    useCallback(() => {
+      // refetch ignora `enabled`: sin sesión no hay inbox que pedir.
+      if (!isGuest) void chats.refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isGuest]),
+  );
 
-    return (
-      <Pressable
-        key={thread.id}
-        accessibilityRole="button"
-        onPress={() => router.push(`/chat/${thread.id}`)}
-        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
-        <Avatar name={thread.peerName} size={48} />
-        <View style={styles.rowInfo}>
-          <View style={styles.rowTop}>
-            <Text style={styles.rowTitle} numberOfLines={1}>{thread.peerName}</Text>
-            <Text style={styles.rowTime}>{thread.lastTime}</Text>
+  const renderRow = (thread: ChatPreviewDto) => (
+    <Pressable
+      key={thread.id}
+      accessibilityRole="button"
+      onPress={() => router.push(`/chat/${thread.id}`)}
+      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}>
+      <Avatar name={thread.counterpart.fullName} size={48} />
+      <View style={styles.rowInfo}>
+        <View style={styles.rowTop}>
+          <Text style={styles.rowTitle} numberOfLines={1}>{thread.counterpart.fullName}</Text>
+          <Text style={styles.rowTime}>{formatChatTime(thread.lastMessage?.createdAt ?? thread.updatedAt)}</Text>
+        </View>
+        <Text style={styles.rowSubtitle} numberOfLines={1}>
+          {thread.vehicle?.title ?? 'Consulta general'}
+          {thread.lastMessage ? ` · ${thread.lastMessage.content}` : ''}
+        </Text>
+      </View>
+      <View style={styles.rowRight}>
+        {thread.unreadCount > 0 ? (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadText}>{thread.unreadCount}</Text>
           </View>
-          <Text style={styles.rowSubtitle} numberOfLines={1}>
-            {product?.title} · {last.text}
-          </Text>
-        </View>
-        <View style={styles.rowRight}>
-          {thread.unread > 0 ? (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{thread.unread}</Text>
-            </View>
-          ) : null}
-          <Feather name="chevron-right" size={18} color={Colors.textMuted} />
-        </View>
-      </Pressable>
-    );
-  };
+        ) : null}
+        <Feather name="chevron-right" size={18} color={Colors.textMuted} />
+      </View>
+    </Pressable>
+  );
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader title="Inbox" />
+      {isGuest ? (
+        <SignInPrompt
+          icon="message-circle"
+          title="Tus conversaciones"
+          body="Iniciá sesión para escribirle a vendedores y compradores y ver tus mensajes."
+          onSignIn={() => router.push('/login')}
+          onRegister={() => router.push('/register')}
+        />
+      ) : (
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 104 + insets.bottom }]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={chats.isRefetching} onRefresh={() => void chats.refetch()} tintColor={Colors.textMuted} />}>
+        {chats.isPending ? (
+          <View style={styles.list}>
+            {[0, 1, 2].map((index) => (
+              <View key={index} style={styles.row}>
+                <Skeleton width={48} height={48} radius={Radius.full} />
+                <View style={styles.rowInfo}>
+                  <Skeleton width="50%" />
+                  <Skeleton width="80%" height={12} />
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : chats.isError ? (
+          <StateView icon="wifi-off" title="No pudimos cargar tus chats" actionLabel="Reintentar" onAction={() => void chats.refetch()} />
+        ) : null}
         {buys.length > 0 ? (
           <View style={styles.section}>
             <SectionHeader title="Compras" />
-            <View style={styles.list}>{buys.map((thread) => renderRow(thread.id))}</View>
+            <View style={styles.list}>{buys.map(renderRow)}</View>
           </View>
         ) : null}
         {sells.length > 0 ? (
           <View style={styles.section}>
             <SectionHeader title="Ventas" />
-            <View style={styles.list}>{sells.map((thread) => renderRow(thread.id))}</View>
+            <View style={styles.list}>{sells.map(renderRow)}</View>
           </View>
         ) : null}
-        {CHAT_THREADS.length === 0 ? (
+        {chats.isSuccess && threads.length === 0 ? (
           <View style={styles.empty}>
             <Feather name="message-circle" size={44} color={Colors.textMuted} />
             <Text style={styles.emptyTitle}>Sin conversaciones</Text>
@@ -73,14 +108,15 @@ export default function ChatsScreen() {
           </View>
         ) : null}
       </ScrollView>
-    </SafeAreaView>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
   content: { paddingHorizontal: Layout.screenX, paddingTop: Spacing.md },
-  section: { gap: Spacing.lg },
+  section: { gap: Spacing.lg, marginBottom: Spacing.xxl },
   list: {
     backgroundColor: Colors.card,
     borderRadius: Radius.md,

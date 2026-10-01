@@ -9,10 +9,11 @@ import type {
   ChatMessagesReadEvent,
   ConnectionErrorEvent,
   DiagnosticDoneEvent,
+  OrderPaidEvent,
   OutbidEvent,
 } from '@/lib/types/api';
 
-/** Eventos que la app escucha, con el payload exacto que emite el backend. */
+// Eventos que la app escucha, con el payload exacto que emite el backend.
 export interface ServerEventMap {
   'auction:bid-placed': BidPlacedEvent;
   'auction:outbid': OutbidEvent;
@@ -21,13 +22,11 @@ export interface ServerEventMap {
   'chat:message': ChatMessageEvent;
   'chat:read': ChatMessagesReadEvent;
   'diagnostic:done': DiagnosticDoneEvent;
+  'order:paid': OrderPaidEvent;
   'connection:error': ConnectionErrorEvent;
 }
 
-/**
- * `Socket` tipa `on` con un fallback que choca con nuestro mapa de payloads, así
- * que para suscribirse se usa esta vista laxa y el tipado real queda en `subscribe`.
- */
+// `Socket.on` choca con nuestro mapa de payloads: se usa esta vista laxa y el tipado real queda en `subscribe`.
 interface LooseEmitter {
   on(event: string, handler: (payload: unknown) => void): void;
   off(event: string, handler: (payload: unknown) => void): void;
@@ -46,8 +45,7 @@ let socket: Socket | null = null;
 let connecting: Promise<Socket> | null = null;
 
 function handleServerDisconnect(instance: Socket): void {
-  // El servidor corta la sesión a los 10 minutos con disconnect desde su lado, y
-  // socket.io-client no reconecta solo en ese caso: hay que hacerlo con el token vigente.
+  // El servidor corta a los 10 minutos y socket.io-client no reconecta solo: se reconecta con el token vigente.
   if (instance.connected) return;
   void getAccessToken().then((token) => {
     if (!token) return;
@@ -57,7 +55,7 @@ function handleServerDisconnect(instance: Socket): void {
   });
 }
 
-/** Conexión única y perezosa: la crea el primer hook que la necesita. */
+// Conexión única y perezosa: la crea el primer hook que la necesita.
 export function connectSocket(): Promise<Socket> {
   if (socket?.connected) return Promise.resolve(socket);
   if (connecting) return connecting;
@@ -83,7 +81,7 @@ export function disconnectSocket(): void {
   connecting = null;
 }
 
-/** Conecta si hace falta y devuelve la función para dejar de escuchar. */
+// Conecta si hace falta y devuelve la función para dejar de escuchar.
 export async function subscribe<K extends keyof ServerEventMap>(
   event: K,
   handler: (payload: ServerEventMap[K]) => void,
@@ -93,6 +91,35 @@ export async function subscribe<K extends keyof ServerEventMap>(
   instance.on(event, listener);
   return () => {
     instance.off(event, listener);
+  };
+}
+
+// Las salas no sobreviven a una reconexión: el join se repite en cada `connect`.
+async function joinRoom(event: string, payload: Record<string, string>): Promise<() => void> {
+  const instance = await connectSocket();
+  const join = () => instance.emit(event, payload);
+  if (instance.connected) join();
+  instance.on('connect', join);
+  return () => {
+    instance.off('connect', join);
+  };
+}
+
+// Entra a la sala de la subasta y devuelve la función para salir.
+export async function watchAuction(auctionId: string): Promise<() => void> {
+  const stop = await joinRoom(SERVER_EVENTS.auctionJoin, { auctionId });
+  return () => {
+    stop();
+    leaveAuction(auctionId);
+  };
+}
+
+// Entra a la sala del chat y devuelve la función para salir.
+export async function watchChat(chatId: string): Promise<() => void> {
+  const stop = await joinRoom(SERVER_EVENTS.chatJoin, { chatId });
+  return () => {
+    stop();
+    leaveChat(chatId);
   };
 }
 

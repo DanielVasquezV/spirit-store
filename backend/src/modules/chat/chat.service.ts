@@ -56,6 +56,8 @@ export interface ChatPreviewDto {
   vehicle: { id: string; title: string; imageUrl: string | null } | null;
   /** Siempre el otro, segun quien mire. */
   counterpart: { id: string; fullName: string };
+  /** Lado de quien mira: el inbox agrupa en Compras/Ventas sin conocer buyerId. */
+  viewerRole: 'BUYER' | 'SELLER';
   lastMessage: ChatMessageDto | null;
   unreadCount: number;
   createdAt: string;
@@ -101,6 +103,7 @@ function toPreview(row: ChatListRow | ChatDetailRow, viewerId: string, unreadCou
       }
       : null,
     counterpart: { id: counterpart.id, fullName: counterpart.fullName },
+    viewerRole: row.buyerId === viewerId ? 'BUYER' : 'SELLER',
     lastMessage: last ? toMessageDto(last) : null,
     unreadCount,
     createdAt: row.createdAt.toISOString(),
@@ -269,7 +272,7 @@ export async function sendMessage(
   senderId: string,
   input: SendMessageInput,
 ): Promise<ChatMessageDto> {
-  await assertParticipant(chatId, senderId);
+  const recipientId = await assertParticipant(chatId, senderId);
 
   const content = input.content.trim();
   if (!content) throw AppError.badRequest('Validation failed', { content: 'content no puede estar vacio' });
@@ -308,7 +311,7 @@ export async function sendMessage(
   const dto = toMessageDto(message);
   // Despues del commit: emitir adentro le mostraria al otro un mensaje que
   // todavia puede fallar y deshacerse.
-  emitChatMessage({ chatId, message: dto });
+  emitChatMessage({ chatId, recipientId, message: dto });
   return dto;
 }
 

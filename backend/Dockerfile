@@ -2,7 +2,7 @@
 
 # ============================================================================
 # STAGE 1: builder
-# Instala dependencias del monorepo (npm workspaces), genera el cliente Prisma
+# Instala dependencias del monorepo (pnpm workspace), genera el cliente Prisma
 # y compila TypeScript.
 # ============================================================================
 FROM node:22-slim AS builder
@@ -11,14 +11,15 @@ FROM node:22-slim AS builder
 ENV DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder"
 
 WORKDIR /workspace
+# pnpm viene por corepack con la version fijada en "packageManager" del package.json raiz.
+RUN corepack enable
 
 # Solo manifiestos -> mejor cache de capas
-COPY package.json package-lock.json ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY backend/package.json ./backend/package.json
 COPY frontend/package.json ./frontend/package.json
 
-# npm 11: los scripts de build quedarán cubiertos por "allowScripts" (package.json raiz)
-RUN npm ci
+RUN pnpm install --frozen-lockfile --filter @spirit-store/backend...
 
 # Codigo fuente del backend
 COPY backend/prisma ./backend/prisma
@@ -26,39 +27,39 @@ COPY backend/prisma.config.ts ./backend/prisma.config.ts
 COPY backend/tsconfig.json ./backend/tsconfig.json
 COPY backend/src ./backend/src
 
-RUN npm run prisma:generate -w @spirit-store/backend
-RUN npm run build -w @spirit-store/backend
+RUN pnpm --filter @spirit-store/backend prisma:generate
+RUN pnpm --filter @spirit-store/backend build
 
 # ============================================================================
 # STAGE 2: runner
-# Dependencias de produccion del monorepo + artifact compilado. Sin tooling dev.
+# Solo dependencias de produccion del backend + artifact compilado.
 # ============================================================================
 FROM node:22-slim AS runner
 
 ENV NODE_ENV=production
+# nodeLinker hoisted: los binarios (prisma) quedan en el node_modules de la raiz del workspace.
+ENV PATH=/app/node_modules/.bin:$PATH
 
 WORKDIR /app
+RUN corepack enable
 
-# Manifiestos del workspace para instalar SOLO dependencias de produccion.
-# npm ci instala el workspace completo (incluye deps prod del frontend, que no
-# se usan aqui; es la forma mas simple de quedarse sin tooling de desarrollo).
-COPY --from=builder /workspace/package.json ./package.json
-COPY --from=builder /workspace/package-lock.json ./package-lock.json
+COPY --from=builder /workspace/package.json /workspace/pnpm-lock.yaml /workspace/pnpm-workspace.yaml ./
 COPY --from=builder /workspace/backend/package.json ./backend/package.json
 COPY --from=builder /workspace/frontend/package.json ./frontend/package.json
 
-RUN npm ci --omit=dev
+RUN pnpm install --prod --frozen-lockfile --filter @spirit-store/backend...
 
-# Copiamos el codigo compilado y los archivos necesarios para migraciones
-COPY --from=builder /workspace/backend/dist ./dist
-COPY --from=builder /workspace/backend/prisma ./prisma
-COPY --from=builder /workspace/backend/prisma.config.ts ./prisma.config.ts
-COPY backend/entrypoint.sh ./entrypoint.sh
+# Codigo compilado y lo necesario para migraciones
+COPY --from=builder /workspace/backend/dist ./backend/dist
+COPY --from=builder /workspace/backend/prisma ./backend/prisma
+COPY --from=builder /workspace/backend/prisma.config.ts ./backend/prisma.config.ts
+COPY backend/entrypoint.sh ./backend/entrypoint.sh
 
 # Usuario sin privilegios
 RUN chown -R node:node /app
 USER node
 
+WORKDIR /app/backend
 EXPOSE 4000
 
 ENTRYPOINT ["sh", "./entrypoint.sh"]

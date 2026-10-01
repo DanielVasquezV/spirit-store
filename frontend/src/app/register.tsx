@@ -1,7 +1,7 @@
-import { Redirect, router } from 'expo-router';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Logo } from '@/components/logo';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { ScreenHeader } from '@/components/ui/screen-header';
@@ -23,7 +23,11 @@ export default function RegisterScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (status === 'authenticated') router.replace('/(tabs)');
+    // Se vuelve a la pantalla que pidió la cuenta; si se abrió directo, a Home.
+    if (status === 'authenticated') {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)');
+    }
   }, [status]);
 
   const handleSubmit = async () => {
@@ -42,16 +46,20 @@ export default function RegisterScreen() {
     }
   };
 
-  if (status === 'authenticated') return <Redirect href="/(tabs)" />;
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader title="Crear cuenta" onBack={() => router.back()} />
 
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         showsVerticalScrollIndicator={false}>
+        <View style={styles.brand}>
+          <Logo variant="full" width={160} />
+        </View>
         <Text style={styles.lead}>Comprá o vendé: una sola cuenta para ambas cosas</Text>
 
         <View style={styles.form}>
@@ -77,7 +85,7 @@ export default function RegisterScreen() {
             label="Teléfono"
             value={phone}
             onChangeText={setPhone}
-            placeholder="+1 555 000 1234"
+            placeholder="+503 7000 0000+5"
             autoCapitalize="none"
             autoComplete="tel"
             keyboardType="phone-pad"
@@ -121,22 +129,25 @@ export default function RegisterScreen() {
           </Pressable>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <StickyCta>
         <Button label="Crear cuenta" size="lg" fullWidth onPress={handleSubmit} disabled={submitting} />
       </StickyCta>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
+  flex: { flex: 1 },
   content: {
     paddingHorizontal: Layout.screenX,
     paddingTop: Spacing.md,
     paddingBottom: Layout.ctaBarHeight + Spacing.giant,
     gap: Spacing.xxl,
   },
+  brand: { alignItems: 'center', paddingVertical: Spacing.md },
   lead: { ...Type.bodySm, color: Colors.textMuted },
   note: { ...Type.caption, color: Colors.textMuted },
   form: { gap: Spacing.lg },

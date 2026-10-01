@@ -1,14 +1,13 @@
 import type { Request, Response } from 'express';
 
 import { asyncHandler, AppError } from '../../middleware/error-handler.js';
-import { created, noContent, ok } from '../../lib/api-response.js';
+import { created, noContent } from '../../lib/api-response.js';
 import * as uploadService from './upload.service.js';
 import type { UploadKind } from './upload.service.js';
 
 const KINDS: readonly UploadKind[] = ['vehicles', 'dui', 'chat', 'misc'];
 
-// Lista blanca: sin ella, un usuario escribiría rutas arbitrarias en el nombre
-// del asset de Cloudinary.
+// Lista blanca: sin ella, un usuario escribiría rutas arbitrarias dentro del bucket.
 function readKind(value: unknown): UploadKind {
   if (typeof value === 'string' && (KINDS as readonly string[]).includes(value)) {
     return value as UploadKind;
@@ -16,12 +15,6 @@ function readKind(value: unknown): UploadKind {
   if (value === undefined) return 'misc';
   throw AppError.badRequest(`kind debe ser uno de: ${KINDS.join(', ')}`);
 }
-
-/** Firma para subir directo a Cloudinary. */
-export const sign = asyncHandler(async (req: Request, res: Response) => {
-  const kind = readKind((req.body as Record<string, unknown> | undefined)?.['kind']);
-  ok(res, uploadService.signUpload(kind));
-});
 
 /** Subida proxy: el archivo viene en el multipart, campo `file`. */
 export const uploadOne = asyncHandler(async (req: Request, res: Response) => {
@@ -45,9 +38,7 @@ export const uploadOne = asyncHandler(async (req: Request, res: Response) => {
   created(res, asset);
 });
 
-// El publicId va por query y no por path: trae barras
-// (spiritapex/vehicles/<userId>/<ts>-<rand>) y Express no las deja pasar en un
-// :param de un solo segmento.
+// El publicId va por query y no por path: trae barras (spiritapex/vehicles/<userId>/...) que un :param no admite.
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   const publicId = req.query['publicId'];
   if (typeof publicId !== 'string' || !publicId) {

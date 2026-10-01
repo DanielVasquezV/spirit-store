@@ -54,7 +54,14 @@ export async function updateSelf(id: string, input: UpdateSelfInput): Promise<Se
     data: {
       ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
       ...(input.phoneNumber !== undefined ? { phoneNumber: input.phoneNumber } : {}),
-      ...(input.duiPhotoUrl !== undefined ? { duiPhotoUrl: input.duiPhotoUrl } : {}),
+      // Proyecto de prueba sin revisión manual: cargar el DUI lo verifica en el acto; quitarlo vuelve a NONE.
+      ...(input.duiPhotoUrl !== undefined
+        ? {
+            duiPhotoUrl: input.duiPhotoUrl,
+            duiStatus: input.duiPhotoUrl ? 'VERIFIED' : 'NONE',
+            duiVerifiedAt: input.duiPhotoUrl ? new Date() : null,
+          }
+        : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
     },
   });

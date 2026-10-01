@@ -13,7 +13,7 @@ interface FailureEnvelope {
   error: { code: string; message: string; details?: Record<string, unknown> };
 }
 
-/** Lo que devuelve un listado paginado, ya normalizado para las listas de la app. */
+// Lo que devuelve un listado paginado, ya normalizado para las listas de la app.
 export interface Paginated<T> {
   items: T[];
   page: number;
@@ -32,8 +32,7 @@ export interface RequestConfig {
 type UnauthorizedHandler = () => void;
 let onUnauthorized: UnauthorizedHandler | null = null;
 
-// El cliente no conoce el estado de sesión: el provider le inyecta qué hacer
-// cuando la API responde 401, y así ningún módulo de datos reimplementa el logout.
+// El provider inyecta qué hacer ante un 401 para que ningún módulo de datos reimplemente el logout.
 export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
   onUnauthorized = handler;
 }
@@ -51,6 +50,8 @@ async function request<T>(method: string, path: string, config: RequestConfig = 
   const url = `${API_ORIGIN}${API_PREFIX}${path}${buildQuery(config.query)}`;
   const token = await getAccessToken();
   const { signal, done } = withTimeout(config.timeoutMs ?? REQUEST_TIMEOUT_MS, config.signal);
+  // Con FormData el boundary del multipart lo pone fetch: fijar Content-Type a mano lo rompe.
+  const isForm = typeof FormData !== 'undefined' && config.body instanceof FormData;
 
   let response: Response;
   try {
@@ -59,14 +60,14 @@ async function request<T>(method: string, path: string, config: RequestConfig = 
       signal,
       headers: {
         Accept: 'application/json',
-        ...(config.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(config.body === undefined || isForm ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      ...(config.body === undefined ? {} : { body: JSON.stringify(config.body) }),
+      ...(config.body === undefined ? {} : { body: isForm ? (config.body as FormData) : JSON.stringify(config.body) }),
     });
-  } catch {
-    // fetch solo rechaza por red o por abort: en ambos casos la app necesita un
-    // error tipado para pintar su estado de error y no un ReferenceError.
+  } catch (error) {
+    // fetch solo rechaza por red o abort: se tipa el error para que la pantalla pinte su estado de error.
+    console.log('Error de conexión:', error);
     throw new ApiError(0, API_ERROR_CODES.INTERNAL, 'No pudimos conectar con el servidor.');
   } finally {
     done();
@@ -95,11 +96,18 @@ export const http = {
 
   post: async <T>(path: string, body?: unknown, config?: RequestConfig): Promise<T> => {
     const envelope = await request<T>('POST', path, { ...config, body: body ?? {} });
-    return envelope!.data;
+    // Acciones como cancelar responden 204 sin cuerpo: no hay `data` que devolver.
+    return envelope?.data as T;
   },
 
   patch: async <T>(path: string, body?: unknown, config?: RequestConfig): Promise<T> => {
     const envelope = await request<T>('PATCH', path, { ...config, body: body ?? {} });
+    return envelope!.data;
+  },
+
+  upload: async <T>(path: string, form: FormData, config?: RequestConfig): Promise<T> => {
+    // Las fotos pesan más que un JSON: el timeout por defecto corta subidas lentas en 4G.
+    const envelope = await request<T>('POST', path, { timeoutMs: 60_000, ...config, body: form });
     return envelope!.data;
   },
 

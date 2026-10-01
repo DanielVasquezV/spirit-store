@@ -1,36 +1,40 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useState } from 'react';
+import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { Avatar } from '@/components/ui/avatar';
+import { Skeleton } from '@/components/ui/skeleton';
 import { ScreenHeader } from '@/components/ui/screen-header';
-import { Colors, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { CHAT_THREADS, getProductById, type ChatMessage } from '@/lib/mock-data';
+import { Colors, ComposerMaxHeight, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
+import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
+import { useSession } from '@/features/auth/session-provider';
+import { threadSubtitle } from '@/features/chats/chat-rules';
+import { useLiveChat } from '@/features/chats/use-chats';
+import { messageFor } from '@/lib/api/api-error';
+import { formatChatTime } from '@/lib/format';
+import type { ChatMessageDto } from '@/lib/types/api';
 
-const AUTO_REPLIES = [
-  '¡Perfecto! ¿Te parece una prueba de manejo el fin de semana?',
-  'Buena pregunta, te confirmo los detalles por acá.',
-  'Entiendo, dejame revisar los documentos y te escribo.',
-  'Genial, lo seguimos coordinando por este chat.',
-];
+// Burbujas fantasma mientras llega el historial: mismo radio que las reales, alternando los lados.
+function MessagesSkeleton() {
+  return (
+    <View style={styles.skeleton}>
+      {['62%', '48%', '70%'].map((width, index) => (
+        <View key={width} style={index % 2 ? styles.bubbleRowOwn : styles.bubbleRowPeer}>
+          <Skeleton width={width as `${number}%`} height={Layout.touchMin} radius={Radius.md} />
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export default function ChatScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const insets = useSafeAreaInsets();
-  const thread = CHAT_THREADS.find((item) => item.id === id);
-  const [messages, setMessages] = useState<ChatMessage[]>(thread?.messages ?? []);
+  const { keyboardHeight, barPaddingBottom } = useKeyboardInset();
+  const { user } = useSession();
+  const { messages, items: ordered, thread, send } = useLiveChat(id, user?.id);
   const [draft, setDraft] = useState('');
-  const [typing, setTyping] = useState(false);
-  const listRef = useRef<FlatList<ChatMessage>>(null);
-  const replyIndex = useRef(0);
 
-  useEffect(() => {
-    if (!thread) return;
-    setMessages(thread.messages);
-  }, [thread]);
-
-  if (!thread) {
+  if (messages.isError && !thread) {
     return (
       <View style={styles.missing}>
         <Text style={styles.missingText}>Conversación no encontrada</Text>
@@ -41,105 +45,93 @@ export default function ChatScreen() {
     );
   }
 
-  const product = getProductById(thread.vehicleId);
+  const peerName = thread?.counterpart.fullName ?? 'Chat';
 
-  const send = () => {
+  const submit = () => {
     const text = draft.trim();
-    if (!text) return;
-    const message: ChatMessage = { id: `me-${Date.now()}`, from: 'me', text, time: 'Ahora' };
-    setMessages((current) => [...current, message]);
-    setDraft('');
-    scheduleReply();
+    if (!text || send.isPending) return;
+    send.mutate(text, { onSuccess: () => setDraft('') });
   };
 
-  // Respuesta simulada de la contraparte para que el hilo se sienta vivo.
-  const scheduleReply = () => {
-    setTyping(true);
-    const delay = 1400 + Math.random() * 700;
-    setTimeout(() => {
-      setTyping(false);
-      const reply: ChatMessage = {
-        id: `peer-${Date.now()}`,
-        from: 'peer',
-        text: AUTO_REPLIES[replyIndex.current % AUTO_REPLIES.length],
-        time: 'Ahora',
-      };
-      replyIndex.current += 1;
-      setMessages((current) => [...current, reply]);
-    }, delay);
-  };
-
-  const renderMessage = ({ item }: { item: ChatMessage }) => {
-    const own = item.from === 'me';
+  const renderMessage = ({ item }: { item: ChatMessageDto }) => {
+    const own = item.senderId === user?.id;
     return (
       <View style={[styles.bubbleRow, own ? styles.bubbleRowOwn : styles.bubbleRowPeer]}>
-        {!own ? <Avatar name={thread.peerName} size={28} /> : null}
+        {!own ? <Avatar name={item.senderName} size={28} /> : null}
         <View style={[styles.bubble, own ? styles.bubbleOwn : styles.bubblePeer]}>
-          <Text style={styles.bubbleText}>{item.text}</Text>
-          <Text style={[styles.bubbleTime, own ? styles.bubbleTimeOwn : styles.bubbleTimePeer]}>{item.time}</Text>
+          <Text style={styles.bubbleText}>{item.content}</Text>
+          <Text style={[styles.bubbleTime, own ? styles.bubbleTimeOwn : styles.bubbleTimePeer]}>
+            {formatChatTime(item.createdAt)}
+            {own && item.isRead ? ' · Visto' : ''}
+          </Text>
         </View>
       </View>
     );
   };
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader
-        title={product?.title ?? 'Chat'}
-        subtitle={`${thread.peerName} · ${thread.type === 'buy' ? 'Comprando' : 'Vendiendo'}`}
+        title={thread?.vehicle?.title ?? 'Chat'}
+        subtitle={thread ? threadSubtitle(thread) : undefined}
         onBack={() => router.back()}
+        right={
+          thread?.vehicle ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Ver vehículo" hitSlop={8} onPress={() => router.push(`/product/${thread.vehicle!.id}`)}>
+              <Feather name="external-link" size={20} color={Colors.textMuted} />
+            </Pressable>
+          ) : undefined
+        }
       />
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}>
+      <View style={[styles.flex, { paddingBottom: keyboardHeight }]}>
+        {/* Invertida: la API entrega lo más nuevo primero y así el hilo arranca abajo sin scrollToEnd. */}
         <FlatList
-          ref={listRef}
-          data={messages}
+          inverted
+          data={ordered}
           keyExtractor={(message) => message.id}
           renderItem={renderMessage}
-          contentContainerStyle={[styles.messages, { paddingBottom: Spacing.md }]}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          ListFooterComponent={
-            typing ? (
-              <View style={[styles.bubbleRow, styles.bubbleRowPeer]}>
-                <Avatar name={thread.peerName} size={28} />
-                <View style={[styles.bubble, styles.bubblePeer]}>
-                  <Text style={styles.typingText}>Escribiendo…</Text>
-                </View>
-              </View>
-            ) : null
+          contentContainerStyle={[styles.messages, { paddingTop: Spacing.md }]}
+          onEndReached={() => {
+            if (messages.hasNextPage && !messages.isFetchingNextPage) void messages.fetchNextPage();
+          }}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={messages.isPending || messages.isFetchingNextPage ? <MessagesSkeleton /> : null}
+          ListEmptyComponent={
+            messages.isSuccess ? <Text style={styles.emptyText}>Escribí el primer mensaje para {peerName}.</Text> : null
           }
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}
         />
-      </KeyboardAvoidingView>
 
-      <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, Spacing.sm) }]}>
-        <View style={styles.inputWrap}>
-          <TextInput
-            style={styles.input}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="Escribí un mensaje…"
-            placeholderTextColor={Colors.textMuted}
-            selectionColor={Colors.text}
-            multiline={false}
-            returnKeyType="send"
-            onSubmitEditing={send}
-          />
+        {send.error ? <Text style={styles.sendError}>{messageFor(send.error, 'No se pudo enviar el mensaje.')}</Text> : null}
+        <View style={[styles.inputBar, { paddingBottom: barPaddingBottom }]}>
+          <View style={styles.inputWrap}>
+            <TextInput
+              style={styles.input}
+              value={draft}
+              onChangeText={setDraft}
+              placeholder="Escribí un mensaje…"
+              placeholderTextColor={Colors.textMuted}
+              selectionColor={Colors.text}
+              multiline
+              blurOnSubmit={false}
+              scrollEnabled
+              textAlignVertical="center"
+            />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Enviar"
+            disabled={!draft.trim() || send.isPending}
+            onPress={submit}
+            style={({ pressed }) => [styles.send, (!draft.trim() || send.isPending) && styles.sendDisabled, pressed && styles.sendPressed]}>
+            <Feather name="arrow-up" size={20} color={draft.trim() && !send.isPending ? Colors.textInverse : Colors.textMuted} />
+          </Pressable>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Enviar"
-          disabled={!draft.trim()}
-          onPress={send}
-          style={({ pressed }) => [styles.send, !draft.trim() && styles.sendDisabled, pressed && styles.sendPressed]}>
-          <Feather name="arrow-up" size={20} color={draft.trim() ? Colors.textInverse : Colors.textMuted} />
-        </Pressable>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -151,6 +143,7 @@ const styles = StyleSheet.create({
   backText: { ...Type.bodyStrong, color: Colors.accent },
   messages: { paddingHorizontal: Layout.screenX, paddingTop: Spacing.lg, gap: Spacing.sm },
   bubbleRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.sm },
+  skeleton: { gap: Spacing.sm, paddingVertical: Spacing.sm },
   bubbleRowOwn: { justifyContent: 'flex-end' },
   bubbleRowPeer: { justifyContent: 'flex-start' },
   bubble: { maxWidth: '78%', borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 2 },
@@ -160,10 +153,11 @@ const styles = StyleSheet.create({
   bubbleTime: { ...Type.caption, marginTop: 2, alignSelf: 'flex-end' },
   bubbleTimeOwn: { color: Colors.textSecondary },
   bubbleTimePeer: { color: Colors.textMuted },
-  typingText: { ...Type.bodySm, color: Colors.textSecondary },
+  emptyText: { ...Type.body, color: Colors.textMuted, textAlign: 'center', paddingVertical: Spacing.huge, transform: [{ scaleY: -1 }] },
+  sendError: { ...Type.caption, color: Colors.danger, paddingHorizontal: Layout.screenX, paddingBottom: Spacing.xs },
   inputBar: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     gap: Spacing.sm,
     paddingHorizontal: Layout.screenX,
     paddingTop: Spacing.sm,
@@ -173,18 +167,25 @@ const styles = StyleSheet.create({
   },
   inputWrap: {
     flex: 1,
-    height: 44,
+    minHeight: Layout.composerMinHeight,
+    maxHeight: ComposerMaxHeight,
     paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
     backgroundColor: Colors.overlay,
     borderRadius: Radius.full,
     borderWidth: Hairline,
     borderColor: Colors.border,
     justifyContent: 'center',
   },
-  input: { ...Type.body, color: Colors.text, padding: 0 },
+  input: {
+    ...Type.body,
+    color: Colors.text,
+    padding: 0,
+    maxHeight: ComposerMaxHeight - Spacing.sm * 2,
+  },
   send: {
-    width: 44,
-    height: 44,
+    width: Layout.composerMinHeight,
+    height: Layout.composerMinHeight,
     borderRadius: Radius.full,
     backgroundColor: Colors.accent,
     alignItems: 'center',

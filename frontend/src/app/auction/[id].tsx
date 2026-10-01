@@ -3,9 +3,10 @@ import { useEffect, useRef } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { useAudioPlayer } from 'expo-audio';
-import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { interpolateColor, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { PhotoGallery } from '@/components/photo-gallery';
-import { useLiveAuction, type BidEntry } from '@/hooks/use-live-auction';
+import { DetailSkeleton } from '@/components/state-view';
+import { useLiveAuction, type BidEntry } from '@/features/auctions/use-live-auction';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Price } from '@/components/ui/price';
@@ -13,14 +14,14 @@ import { ScreenHeader } from '@/components/ui/screen-header';
 import { SectionHeader } from '@/components/ui/section-header';
 import { StickyCta } from '@/components/ui/sticky-cta';
 import { Colors, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
+import { isNotFound } from '@/lib/api/api-error';
 import { formatBidStamp, formatClock, formatPriceParts } from '@/lib/format';
-import { getProductById } from '@/lib/mock-data';
 
 const COIN = require('../../../assets/sounds/coin.wav');
 
 function BidRow({ entry }: { entry: BidEntry }) {
   const enter = useSharedValue(0);
-  const own = entry.name === 'Tú';
+  const own = entry.own;
 
   useEffect(() => {
     // Cada fila nueva entra con rebote: es la señal visual de una puja recién caída.
@@ -47,18 +48,18 @@ function BidRow({ entry }: { entry: BidEntry }) {
 
 export default function AuctionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const product = id ? getProductById(id) : undefined;
-  const { current, secondsLeft, status, entries, nextStep, progress, bump, bid } = useLiveAuction(product?.price ?? 0);
+  const live = useLiveAuction(id);
+  const { auction, query, current, secondsLeft, status, entries, nextStep, progress, bump, bid } = live;
   const coin = useAudioPlayer(COIN);
   const topBidId = entries[0]?.id;
   const firstRender = useRef(true);
 
   useEffect(() => {
+    // El primer valor llega con la carga inicial: la moneda solo suena con pujas posteriores.
     if (firstRender.current) {
-      firstRender.current = false;
+      if (topBidId) firstRender.current = false;
       return;
     }
-    // Moneda al entrar una puja nueva, venga del simulador o del usuario.
     // El catch evita ruido si el player todavía no terminó de cargar el asset.
     void coin.seekTo(0).then(() => coin.play()).catch(() => {});
   }, [topBidId, coin]);
@@ -70,30 +71,50 @@ export default function AuctionScreen() {
     backgroundColor: interpolateColor(progress.value, [0, 0.2, 0.6, 1], [Colors.danger, Colors.warning, Colors.success, Colors.accent]),
   }));
 
-  if (!product) {
+  if (query.isPending) {
+    return (
+      <View style={styles.screen}>
+        <ScreenHeader title="Subasta" onBack={() => router.back()} />
+        <DetailSkeleton />
+      </View>
+    );
+  }
+
+  if (!auction) {
     return (
       <View style={styles.missing}>
-        <Text style={styles.missingText}>Subasta no encontrada</Text>
+        <Text style={styles.missingText}>{query.isError && !isNotFound(query.error) ? 'No pudimos cargar la subasta' : 'Subasta no encontrada'}</Text>
+        {query.isError && !isNotFound(query.error) ? <Button label="Reintentar" size="sm" variant="secondary" onPress={() => void query.refetch()} /> : null}
         <Button label="Volver" size="sm" onPress={() => router.back()} />
       </View>
     );
   }
 
+  const product = auction.vehicle;
   const closed = status === 'CLOSED';
+
+  const pending = status === 'PENDING';
 
   const onBid = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     bid();
   };
 
+  const onCta = () => {
+    if (live.cta.action === 'pay' && live.wonOrder) router.push(`/checkout/${live.wonOrder.id}`);
+    else if (live.cta.action === 'sign-in') router.push('/login');
+    else if (live.cta.action === 'upload-dui') router.push('/profile');
+    else if (live.cta.action === 'bid') onBid();
+  };
+
   return (
     <View style={styles.screen}>
-      <ScreenHeader title={product.model} subtitle={product.title} onBack={() => router.back()} />
+      <ScreenHeader title={product.model} subtitle={product.brand} onBack={() => router.back()} />
 
       <Animated.ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: Layout.ctaBarHeight + Spacing.xl }]}
         showsVerticalScrollIndicator={false}>
-        <PhotoGallery images={product.images} />
+        <PhotoGallery images={product.images.map((image) => image.url)} />
 
         <View style={styles.liveCard}>
           <View style={styles.liveTop}>
@@ -104,13 +125,13 @@ export default function AuctionScreen() {
               </View>
             ) : (
               <View style={styles.pill}>
-                <View style={styles.pillDot} />
-                <Text style={styles.pillText}>En vivo</Text>
+                <View style={[styles.pillDot, pending && { backgroundColor: Colors.warning }]} />
+                <Text style={[styles.pillText, pending && { color: Colors.warning }]}>{pending ? 'Próximamente' : 'En vivo'}</Text>
               </View>
             )}
 
             <View style={styles.timer}>
-              <Text style={styles.timerText}>{closed ? 'Finalizada' : formatClock(secondsLeft)}</Text>
+              <Text style={styles.timerText}>{closed ? (auction.status === 'CLOSED' ? 'Sin pago' : 'Finalizada') : pending ? 'Programada' : formatClock(secondsLeft)}</Text>
             </View>
           </View>
 
@@ -120,32 +141,46 @@ export default function AuctionScreen() {
           </View>
 
           <Animated.View style={priceStyle}>
-            <Price amount={current} variant="hero" caption={closed ? 'Precio final' : 'Puja actual'} />
+            <Price amount={current} variant="hero" caption={closed ? 'Precio final' : live.hasBids ? 'Puja actual' : 'Puja inicial'} />
           </Animated.View>
 
-          <View style={styles.nextRow}>
-            <Text style={styles.nextLabel}>Mínimo siguiente</Text>
-            <Text style={styles.nextValue}>${formatPriceParts(nextStep).whole}</Text>
-          </View>
+          {closed ? null : (
+            <View style={styles.nextRow}>
+              <Text style={styles.nextLabel}>Mínimo siguiente</Text>
+              <Text style={styles.nextValue}>${formatPriceParts(nextStep).whole}</Text>
+            </View>
+          )}
+
+          {auction.status === 'CLOSED' ? (
+            <Text style={styles.bidError}>El ganador no pagó a tiempo: la subasta quedó cerrada sin venta.</Text>
+          ) : live.isWinning ? (
+            <Text style={styles.winning}>{closed ? 'Ganaste esta subasta' : 'Vas ganando esta subasta'}</Text>
+          ) : null}
+          {live.needsDui && !closed ? <Text style={styles.bidError}>Para pujar necesitás cargar tu DUI en el perfil.</Text> : null}
+          {live.bidError ? <Text style={styles.bidError}>{live.bidError}</Text> : null}
         </View>
 
         <View style={styles.section}>
-          <SectionHeader title="Últimas pujas" count={`${entries.length}`} />
-          <View style={styles.feed}>
-            {entries.map((entry) => (
-              <BidRow key={entry.id} entry={entry} />
-            ))}
-          </View>
+          <SectionHeader title="Últimas pujas" count={`${auction.bidCount}`} />
+          {entries.length > 0 ? (
+            <View style={styles.feed}>
+              {entries.map((entry) => (
+                <BidRow key={entry.id} entry={entry} />
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.noBids}>Todavía nadie pujó. La primera puja arranca en el precio de salida.</Text>
+          )}
         </View>
       </Animated.ScrollView>
 
       <StickyCta>
         <Button
-          label={closed ? 'Subasta cerrada' : `Pujar $${formatPriceParts(nextStep).whole}`}
+          label={live.cta.label}
           fullWidth
           size="lg"
-          disabled={closed}
-          onPress={onBid}
+          disabled={live.cta.disabled}
+          onPress={onCta}
         />
       </StickyCta>
     </View>
@@ -207,4 +242,7 @@ const styles = StyleSheet.create({
   bidNameOwn: { ...Type.bodyStrong, color: Colors.text },
   bidTime: { ...Type.caption, color: Colors.textMuted },
   bidAmount: { ...Type.bodyStrong, color: Colors.text },
+  winning: { ...Type.label, color: Colors.success },
+  bidError: { ...Type.caption, color: Colors.danger },
+  noBids: { ...Type.body, color: Colors.textMuted },
 });

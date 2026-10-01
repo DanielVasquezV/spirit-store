@@ -1,16 +1,19 @@
 import {
-  cloudinary,
-  cloudinaryCredentials,
-  isCloudinaryConfigured,
+  ALLOWED_MIME_TYPES,
+  bucketName,
+  isStorageConfigured,
+  publicUrl,
   rootFolder,
-  UPLOAD_TRANSFORMATION,
+  storageClient,
   uploadFolder,
-  uploadTransformationString,
-} from '../../config/cloudinary.js';
+  type UploadKind,
+} from '../../config/storage.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../middleware/error-handler.js';
-import type { UploadApiOptions } from 'cloudinary';
 
-/** Archivo tal cual llega del multipart de multer. */
+export type { UploadKind };
+
+// Archivo tal cual llega del multipart de multer.
 export interface UploadedFile {
   buffer: Buffer;
   mimetype: string;
@@ -18,10 +21,7 @@ export interface UploadedFile {
   size: number;
 }
 
-export type UploadKind = 'vehicles' | 'dui' | 'chat' | 'misc';
-
-// Guardá el publicId, no la url: es lo único del que se puede derivar el asset
-// para borrarlo o transformarlo después.
+// Se guarda el publicId (la ruta del objeto en el bucket): es lo único con lo que se puede borrar después.
 export interface UploadedAsset {
   url: string;
   publicId: string;
@@ -32,137 +32,84 @@ export interface UploadedAsset {
   resourceType: string;
 }
 
-interface CloudinaryResult {
-  secure_url: string;
-  public_id: string;
-  width?: number;
-  height?: number;
-  bytes: number;
-  format: string;
-  resource_type: string;
-}
+const EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+  'application/pdf': 'pdf',
+};
 
 function assertConfigured(): void {
-  if (!isCloudinaryConfigured()) {
+  if (!isStorageConfigured()) {
     // 503 y no 500: la API está sana, lo que falta es una dependencia.
     throw new AppError(
       503,
       'UPLOAD_UNAVAILABLE',
-      'El servicio de subida de archivos no está configurado (revise CLOUDINARY_URL)',
+      'El servicio de subida de archivos no está configurado (revise SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY)',
     );
   }
 }
 
-// El userId va en el nombre para poder depurar las fotos de un vendedor cuando
-// hay que borrar una cuenta.
-//
-// Sin extensión a propósito: si también la lleva, la URL sale
-// `...-a3w6d5w0.png.png` y el publicId que persistimos deja de coincidir con lo
-// que se ve en el enlace.
-function buildAssetId(userId: string, kind: UploadKind): string {
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${uploadFolder(kind)}/${userId}/${Date.now()}-${random}`;
-}
+let bucketReady: Promise<void> | null = null;
 
-// Se espera el resultado de Cloudinary, no solo la aceptación local: si la API
-// responde 4xx/5xx hay que propagarlo en vez de devolver una url que no existe.
-function runUpload(
-  buffer: Buffer,
-  options: UploadApiOptions,
-): Promise<CloudinaryResult> {
-  return new Promise((resolve, reject) => {
-    const upload = cloudinary.uploader.upload_stream(options, (error, result) => {
-      if (error) {
-        reject(
-          new AppError(502, 'UPLOAD_FAILED', 'Cloudinary rechazó la subida', error.message),
-        );
-        return;
-      }
-      resolve(result as unknown as CloudinaryResult);
+// El bucket se crea público la primera vez: así no hay que configurarlo a mano en el panel de Supabase.
+function ensureBucket(): Promise<void> {
+  bucketReady ??= (async () => {
+    const storage = storageClient().storage;
+    const { data } = await storage.getBucket(bucketName());
+    if (data) return;
+    const { error } = await storage.createBucket(bucketName(), {
+      public: true,
+      fileSizeLimit: env.storage.maxFileSizeBytes,
+      allowedMimeTypes: [...ALLOWED_MIME_TYPES],
     });
-    // Multer deja el archivo en memoria, no como stream.
-    upload.end(buffer);
+    // Otra instancia pudo crearlo entre la lectura y el alta: eso no es un error.
+    if (error && !/already exists/i.test(error.message)) throw error;
+  })().catch((err: unknown) => {
+    bucketReady = null;
+    throw new AppError(502, 'UPLOAD_FAILED', 'No se pudo preparar el bucket de Supabase', (err as Error).message);
   });
+  return bucketReady;
 }
 
-function toAsset(result: CloudinaryResult): UploadedAsset {
+// El userId va en la ruta para poder depurar los archivos de una cuenta cuando hay que borrarla.
+function buildObjectPath(userId: string, kind: UploadKind, mimetype: string): string {
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${uploadFolder(kind)}/${userId}/${Date.now()}-${random}.${EXTENSIONS[mimetype] ?? 'bin'}`;
+}
+
+// Sube a Supabase Storage a través del backend y devuelve la URL pública del bucket.
+export async function uploadFile(file: UploadedFile, userId: string, kind: UploadKind): Promise<UploadedAsset> {
+  assertConfigured();
+  if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
+    throw new AppError(415, 'UNSUPPORTED_MEDIA_TYPE', `Tipo de archivo no permitido: ${file.mimetype}`);
+  }
+  await ensureBucket();
+
+  const path = buildObjectPath(userId, kind, file.mimetype);
+  const { error } = await storageClient()
+    .storage.from(bucketName())
+    .upload(path, file.buffer, { contentType: file.mimetype, cacheControl: '31536000', upsert: false });
+  if (error) {
+    throw new AppError(502, 'UPLOAD_FAILED', 'Supabase Storage rechazó la subida', error.message);
+  }
+
   return {
-    url: result.secure_url,
-    publicId: result.public_id,
-    width: result.width ?? null,
-    height: result.height ?? null,
-    bytes: result.bytes,
-    format: result.format,
-    resourceType: result.resource_type,
+    url: publicUrl(path),
+    publicId: path,
+    // Supabase no procesa la imagen: las dimensiones no se conocen sin decodificarla.
+    width: null,
+    height: null,
+    bytes: file.size,
+    format: EXTENSIONS[file.mimetype] ?? 'bin',
+    resourceType: file.mimetype.startsWith('image/') ? 'image' : 'raw',
   };
 }
 
-// Sube a través del backend. Para perfil, DUI y adjuntos de chat chico; las
-// galerías de vehículo conviene subirlas directas con signUpload.
-export async function uploadFile(
-  file: UploadedFile,
-  userId: string,
-  kind: UploadKind,
-): Promise<UploadedAsset> {
-  assertConfigured();
-
-  const result = await runUpload(file.buffer, {
-    // El public_id ya trae la carpeta: pasar `folder` aparte la antepondría dos
-    // veces.
-    public_id: buildAssetId(userId, kind),
-    resource_type: 'auto',
-    transformation: UPLOAD_TRANSFORMATION,
-  });
-
-  return toAsset(result);
-}
-
-export interface SignedUploadParams {
-  timestamp: number;
-  signature: string;
-  apiKey: string;
-  cloudName: string;
-  folder: string;
-  transformation: string;
-  /** Unix epoch. Informativo: Cloudinary no lo valida, lo respeta el cliente. */
-  expiresAt: number;
-}
-
-// Firma para que el móvil suba directo a Cloudinary sin pasar por la API: en
-// galerías la foto no vuelve a viajar por el backend. Caduca en 5 minutos y solo
-// habilita la carpeta indicada.
-export function signUpload(kind: UploadKind): SignedUploadParams {
-  assertConfigured();
-
-  const { cloudName, apiKey, apiSecret } = cloudinaryCredentials();
-  const timestamp = Math.floor(Date.now() / 1000);
-  const folder = uploadFolder(kind);
-
-  // La firma tiene que cubrir exactamente lo que el cliente va a mandar, si no
-  // Cloudinary la rechaza. La transformación va como string porque así viaja en
-  // los parámetros firmados.
-  const signature = cloudinary.utils.api_sign_request(
-    { timestamp, folder, transformation: uploadTransformationString() },
-    apiSecret,
-  );
-
-  return {
-    timestamp,
-    signature,
-    apiKey,
-    cloudName,
-    folder,
-    transformation: uploadTransformationString(),
-    expiresAt: timestamp + 5 * 60,
-  };
-}
-
-// Sin esto, cualquier autenticado podría borrar assets de otro proyecto con
-// solo saber el nombre. El `..` va aparte porque el public_id de Cloudinary
-// acepta rutas relativas. Sin `kind` alcanza con estar dentro de la carpeta raíz.
+// Sin el chequeo de prefijo, cualquier autenticado podría borrar otros objetos del bucket con solo saber la ruta.
 export async function deleteAsset(publicId: string, kind?: UploadKind): Promise<void> {
-  // La entrada se valida antes que la configuración: es una petición mal
-  // formada y se rechaza sola, sin depender de que Cloudinary esté disponible.
   if (publicId.includes('..')) {
     throw AppError.badRequest('publicId no válido');
   }
@@ -174,9 +121,9 @@ export async function deleteAsset(publicId: string, kind?: UploadKind): Promise<
 
   assertConfigured();
 
-  try {
-    await cloudinary.uploader.destroy(publicId, { invalidate: true });
-  } catch {
+  // remove no falla si el objeto ya no existe: el borrado es idempotente para los reintentos de la app.
+  const { error } = await storageClient().storage.from(bucketName()).remove([publicId]);
+  if (error) {
     throw new AppError(502, 'UPLOAD_FAILED', 'No se pudo eliminar el archivo');
   }
 }

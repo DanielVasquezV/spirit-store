@@ -142,3 +142,33 @@ export const runLifecycle = asyncHandler(async (_req: Request, res: Response) =>
   const result = await runAuctionLifecycle();
   ok(res, result);
 });
+
+
+const HISTORY_ROLES = ['seller', 'winner', 'bidder'] as const;
+
+// Registro del usuario: subastas que creó y en las que pujó, con filtros por rol, estado y texto.
+export const listMine = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.query as Record<string, unknown>;
+  const pagination = parsePagination(query);
+  const filters: auctionService.AuctionHistoryFilters = {};
+
+  const role = readQueryString(query['role']);
+  if (role !== undefined) {
+    if (!(HISTORY_ROLES as readonly string[]).includes(role)) {
+      throw AppError.badRequest('Validation failed', { role: `role debe ser uno de: ${HISTORY_ROLES.join(', ')}` });
+    }
+    filters.role = role as (typeof HISTORY_ROLES)[number];
+  }
+  const status = readQueryString(query['status']);
+  if (status !== undefined) {
+    if (!(ALLOWED_STATUS as readonly string[]).includes(status)) {
+      throw AppError.badRequest('Validation failed', { status: `status debe ser uno de: ${ALLOWED_STATUS.join(', ')}` });
+    }
+    filters.status = status as (typeof ALLOWED_STATUS)[number];
+  }
+  const q = readQueryString(query['q']);
+  if (q) filters.q = q;
+
+  const { rows, total } = await auctionService.listMyAuctions(req.user!.id, filters, pagination);
+  paginated(res, rows, { page: pagination.page, pageSize: pagination.pageSize, total });
+});

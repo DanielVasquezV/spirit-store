@@ -1,5 +1,4 @@
-// Validación de formularios compartida: estaba duplicada entre login y register,
-// así que un cambio de regla se aplicaba en un solo lado.
+// Validación compartida de login y registro: una regla se cambia en un solo lugar.
 
 export type FieldErrors = Record<string, string | undefined>;
 

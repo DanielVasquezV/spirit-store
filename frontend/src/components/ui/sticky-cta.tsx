@@ -1,12 +1,12 @@
 import { StyleSheet, View } from 'react-native';
 import type { ReactNode } from 'react';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Hairline, Layout, Spacing } from '@/constants/theme';
+import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
 
 export function StickyCta({ children }: { children: ReactNode }) {
-  const insets = useSafeAreaInsets();
+  const { keyboardHeight, barPaddingBottom } = useKeyboardInset();
 
-  return <View style={[styles.bar, { paddingBottom: insets.bottom || Spacing.lg }]}>{children}</View>;
+  return <View style={[styles.bar, { bottom: keyboardHeight, paddingBottom: barPaddingBottom }]}>{children}</View>;
 }
 
 const styles = StyleSheet.create({

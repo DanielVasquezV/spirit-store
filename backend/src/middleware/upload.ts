@@ -1,12 +1,12 @@
 import multer from 'multer';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
-import { ALLOWED_MIME_TYPES } from '../config/cloudinary.js';
+import { ALLOWED_MIME_TYPES } from '../config/storage.js';
 import { env } from '../config/env.js';
 import { AppError } from './error-handler.js';
 import { ERROR_CODES } from '../lib/api-response.js';
 
-// En memoria y no en disco: los archivos van directo a Cloudinary, no hay
+// En memoria y no en disco: los archivos van directo a Supabase Storage, no hay
 // motivo para escribirlos ni para limpiarlos después.
 const memoryStorage = multer.memoryStorage();
 
@@ -31,7 +31,7 @@ const multerInstance = multer({
   storage: memoryStorage,
   limits: {
     // El techo de tamaño es lo que evita que un archivo enorme agote la RAM.
-    fileSize: env.cloudinary.maxFileSizeBytes,
+    fileSize: env.storage.maxFileSizeBytes,
     // Una petición = un archivo. Las galerías van de a una para poder
     // reordenar o borrar en cascada.
     files: 1,
@@ -60,8 +60,8 @@ function handleMulterError(
     case 'LIMIT_FILE_SIZE':
       next(
         AppError.badRequest(
-          `El archivo excede el máximo de ${Math.round(env.cloudinary.maxFileSizeBytes / 1024 / 1024)} MB`,
-          { field: err.field, maxBytes: env.cloudinary.maxFileSizeBytes },
+          `El archivo excede el máximo de ${Math.round(env.storage.maxFileSizeBytes / 1024 / 1024)} MB`,
+          { field: err.field, maxBytes: env.storage.maxFileSizeBytes },
         ),
       );
       return;

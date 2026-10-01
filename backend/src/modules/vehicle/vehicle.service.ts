@@ -520,7 +520,7 @@ export async function removeVehicleImage(
   if (!image) throw AppError.notFound('Vehicle image');
 
   // El publicId se guarda justamente para poder limpiar el asset. Se intenta
-  // antes de tocar la base, pero un fallo de Cloudinary no puede dejar al
+  // antes de tocar la base, pero un fallo de Supabase Storage no puede dejar al
   // vendedor con una foto que la API no le deja quitar: la base manda y el
   // asset huerfano queda como tarea de mantenimiento.
   if (image.publicId) {

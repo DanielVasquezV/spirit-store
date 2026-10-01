@@ -7,9 +7,12 @@ type SearchBarProps = {
   placeholder?: string;
   onFilterPress?: () => void;
   onSearch?: (text: string) => void;
+  onSubmit?: (text: string) => void;
+  defaultValue?: string;
+  value?: string;
 };
 
-export function SearchBar({ placeholder = 'Buscar por marca o modelo', onFilterPress, onSearch }: SearchBarProps) {
+export function SearchBar({ placeholder = 'Buscar por marca o modelo', onFilterPress, onSearch, onSubmit, defaultValue, value }: SearchBarProps) {
   return (
     <View style={styles.row}>
       <View style={styles.inputWrap}>
@@ -22,7 +25,10 @@ export function SearchBar({ placeholder = 'Buscar por marca o modelo', onFilterP
           autoCorrect={false}
           autoCapitalize="none"
           returnKeyType="search"
+          defaultValue={defaultValue}
+          value={value}
           onChangeText={onSearch}
+          onSubmitEditing={onSubmit ? (event) => onSubmit(event.nativeEvent.text) : undefined}
         />
       </View>
       {onFilterPress ? <IconButton icon="sliders" accessibilityLabel="Filtros" size={48} onPress={onFilterPress} /> : null}

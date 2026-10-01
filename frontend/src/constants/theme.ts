@@ -99,7 +99,13 @@ export const Layout = {
   headerHeight: 56,
   tabBarHeight: 56,
   ctaBarHeight: 72,
+  composerMinHeight: 44,
+  composerMaxLines: 5,
 } as const;
+
+// 1 línea = alto del botón enviar; cada línea extra suma el lineHeight del body.
+export const ComposerMaxHeight =
+  Layout.composerMinHeight + Type.body.lineHeight * (Layout.composerMaxLines - 1);
 
 export const Motion = {
   fast: 120,

@@ -7,7 +7,8 @@ import type { BottomTabBarProps } from 'expo-router/build/react-navigation/botto
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Colors, FontFamily, Hairline, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { CHAT_THREADS } from '@/lib/mock-data';
+import { useSession } from '@/features/auth/session-provider';
+import { useInboxBadge } from '@/features/chats/use-chats';
 
 type FeatherName = ComponentProps<typeof Feather>['name'];
 
@@ -19,7 +20,6 @@ const TAB_ICON: Record<string, FeatherName> = {
   profile: 'user',
 };
 
-const CHAT_UNREAD = CHAT_THREADS.reduce((total, thread) => total + thread.unread, 0);
 const SHELL_RADIUS = Radius.xl;
 const PAD = Spacing.xs + 2;
 const SLIDE_EASING = Easing.bezier(0.22, 1, 0.36, 1);
@@ -27,6 +27,8 @@ const SLIDE_DURATION = 340;
 
 export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const { status } = useSession();
+  const chatUnread = useInboxBadge(status === 'authenticated');
 
   const slots = useRef<{ x: number; width: number }[]>([]);
   const indicatorX = useSharedValue(0);
@@ -72,7 +74,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
           }
         };
 
-        const showBadge = route.name === 'chats' && CHAT_UNREAD > 0;
+        const showBadge = route.name === 'chats' && chatUnread > 0;
 
         return (
           <Pressable
@@ -94,7 +96,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
               <Feather name={icon} size={24} color={focused ? Colors.text : Colors.textMuted} />
               {showBadge ? (
                 <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{CHAT_UNREAD}</Text>
+                  <Text style={styles.badgeText}>{chatUnread > 99 ? '99+' : chatUnread}</Text>
                 </View>
               ) : null}
             </View>

@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import * as authApi from '@/lib/api/auth';
 import { clearAccessToken, getAccessToken, setAccessToken } from '@/lib/api/auth-token-store';
+import { isApiError } from '@/lib/api/api-error';
 import { setUnauthorizedHandler } from '@/lib/api/http-client';
 import { connectSocket, disconnectSocket } from '@/lib/api/socket-client';
 import type { LoginInput, RegisterInput, UpdateProfileInput } from '@/lib/api/auth';
@@ -21,6 +22,22 @@ export interface SessionValue {
 
 const SessionContext = createContext<SessionValue | null>(null);
 
+const RESTORE_ATTEMPTS = 3;
+const RESTORE_RETRY_MS = 1500;
+
+// Un reinicio del servidor o un corte de red al abrir la app no debe cerrar la sesión: se reintenta antes de rendirse.
+async function restoreProfile(): Promise<SelfUser> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await authApi.me();
+    } catch (error) {
+      const retryable = !isApiError(error) || error.status === 0 || error.status >= 500;
+      if (!retryable || attempt >= RESTORE_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, RESTORE_RETRY_MS));
+    }
+  }
+}
+
 export function SessionProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<SessionStatus>('loading');
@@ -35,9 +52,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setStatus('anonymous');
   }, [queryClient]);
 
+  const statusRef = useRef<SessionStatus>('loading');
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   useEffect(() => {
     setUnauthorizedHandler(() => {
-      void signOut();
+      // Sin sesión activa un 401 es esperable: cerrar sesión otra vez vaciaría la caché y repetiría los requests en bucle.
+      if (statusRef.current === 'authenticated') void signOut();
     });
     return () => setUnauthorizedHandler(null);
   }, [signOut]);
@@ -52,13 +75,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         return;
       }
       try {
-        const profile = await authApi.me();
+        const profile = await restoreProfile();
         if (!active) return;
         setUser(profile);
         setStatus('authenticated');
         void connectSocket();
-      } catch {
-        await clearAccessToken();
+      } catch (error) {
+        // Solo un 401 invalida el token: con la API caída se conserva y el próximo arranque reintenta.
+        if (isApiError(error) && error.status === 401) await clearAccessToken();
         if (active) setStatus('anonymous');
       }
     })();
@@ -108,4 +132,8 @@ export function useSession(): SessionValue {
   const value = useContext(SessionContext);
   if (!value) throw new Error('useSession debe usarse dentro de SessionProvider');
   return value;
+}
+// Las consultas privadas se habilitan con esto: así una pantalla abierta como invitado no dispara 401.
+export function useIsAuthenticated(): boolean {
+  return useSession().status === 'authenticated';
 }

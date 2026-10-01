@@ -1,7 +1,7 @@
-import { router, Redirect } from 'expo-router';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Logo } from '@/components/logo';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
 import { ScreenHeader } from '@/components/ui/screen-header';
@@ -20,7 +20,11 @@ export default function LoginScreen() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (status === 'authenticated') router.replace('/(tabs)');
+    // Se vuelve a la pantalla que pidió la cuenta; si se abrió directo, a Home.
+    if (status === 'authenticated') {
+      if (router.canGoBack()) router.back();
+      else router.replace('/(tabs)');
+    }
   }, [status]);
 
   const handleSubmit = async () => {
@@ -33,24 +37,27 @@ export default function LoginScreen() {
     try {
       await signIn({ email: email.trim(), password });
     } catch (error) {
-      // Los errores por campo del servidor pisan los del cliente: es el backend
-      // quien sabe si el correo existe o la contraseña venció.
+      // Los errores por campo del servidor pisan los del cliente: el backend sabe si el correo existe.
       setErrors((current) => ({ ...current, ...fieldErrors(error) }));
       setFormError(messageFor(error, 'No pudimos iniciar sesión.'));
       setSubmitting(false);
     }
   };
 
-  if (status === 'authenticated') return <Redirect href="/(tabs)" />;
 
   return (
-    <SafeAreaView style={styles.screen} edges={['top']}>
+    <View style={styles.screen}>
       <ScreenHeader title="Iniciar sesión" onBack={() => router.back()} />
 
+      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         showsVerticalScrollIndicator={false}>
+        <View style={styles.brand}>
+          <Logo variant="full" width={160} />
+        </View>
         <Text style={styles.lead}>Accedé a tu cuenta para seguir con tu búsqueda</Text>
 
         <View style={styles.form}>
@@ -97,22 +104,25 @@ export default function LoginScreen() {
           </Pressable>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <StickyCta>
         <Button label="Iniciar sesión" size="lg" fullWidth onPress={handleSubmit} disabled={submitting} />
       </StickyCta>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: Colors.bg },
+  flex: { flex: 1 },
   content: {
     paddingHorizontal: Layout.screenX,
     paddingTop: Spacing.md,
     paddingBottom: Layout.ctaBarHeight + Spacing.giant,
     gap: Spacing.xxl,
   },
+  brand: { alignItems: 'center', paddingVertical: Spacing.md },
   lead: { ...Type.bodySm, color: Colors.textMuted },
   form: { gap: Spacing.lg },
   formError: { ...Type.caption, color: Colors.danger },

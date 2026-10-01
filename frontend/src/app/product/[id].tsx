@@ -2,6 +2,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import { PhotoGallery } from '@/components/photo-gallery';
+import { DetailSkeleton } from '@/components/state-view';
 import { Badge } from '@/components/ui/badge';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -10,38 +12,53 @@ import { ScreenHeader } from '@/components/ui/screen-header';
 import { SectionHeader } from '@/components/ui/section-header';
 import { StickyCta } from '@/components/ui/sticky-cta';
 import { Colors, Layout, Radius, Spacing, Type } from '@/constants/theme';
-import { getProductById, SELLERS, techSpecs, saleBadges } from '@/lib/mock-data';
+import { useRequireAuth } from '@/features/auth/use-require-auth';
+import { useVehicleDetail } from '@/features/catalog/use-vehicle-detail';
+import { messageFor } from '@/lib/api/api-error';
+import { techSpecs, vehicleBadges, vehiclePrice } from '@/lib/taxonomy';
 
 export default function ProductScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const insets = useSafeAreaInsets();
-  const product = id ? getProductById(id) : undefined;
+  const detail = useVehicleDetail(id);
+  const { requireAuth } = useRequireAuth();
+  const { vehicle: product, query: vehicleQuery, isOwn: own, liveAuction, buyable, myPendingOrder } = detail;
+
+  if (vehicleQuery.isPending) {
+    return (
+      <View style={styles.screen}>
+        <ScreenHeader title="Cargando" onBack={() => router.back()} />
+        <DetailSkeleton />
+      </View>
+    );
+  }
 
   if (!product) {
     return (
       <View style={styles.missing}>
-        <Text style={styles.missingText}>Vehículo no encontrado</Text>
+        <Text style={styles.missingText}>{detail.loadFailed ? 'No pudimos cargar el vehículo' : 'Vehículo no encontrado'}</Text>
+        {detail.loadFailed ? <Button label="Reintentar" size="sm" variant="secondary" onPress={() => void vehicleQuery.refetch()} /> : null}
         <Button label="Volver al catálogo" size="sm" onPress={() => router.back()} />
       </View>
     );
   }
 
-  const seller = SELLERS[product.id];
   const specs = techSpecs(product);
+  const price = vehiclePrice(product);
+  const buy = () => requireAuth(() => void detail.buy().then((order) => order && router.push(`/checkout/${order.id}`)));
+  const contact = () => requireAuth(() => void detail.contact().then((chat) => chat && router.push(`/chat/${chat.id}`)));
 
   return (
     <View style={styles.screen}>
       <ScreenHeader title={product.model} subtitle={product.brand} onBack={() => router.back()} />
 
       <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: Layout.ctaBarHeight + insets.bottom + Spacing.lg }]}
+        contentContainerStyle={[styles.content, { paddingBottom: Layout.ctaBarHeight * 2 + insets.bottom + Spacing.lg }]}
         showsVerticalScrollIndicator={false}>
-        <View style={styles.stage}>
-          {/* Sin fotos reales todavía: marcador a escala de ficha. */}
-          <Feather name="truck" size={56} color={Colors.borderStrong} />
-          <Text style={styles.stageHint}>Imágenes próximamente</Text>
+        <View>
+          <PhotoGallery images={product.images.map((image) => image.url)} />
           <View style={styles.stageBadges}>
-            {saleBadges(product.saleType).map((badge) => (
+            {vehicleBadges(product).map((badge) => (
               <Badge key={badge} label={badge} />
             ))}
           </View>
@@ -49,7 +66,8 @@ export default function ProductScreen() {
 
         <View style={styles.section}>
           <Text style={styles.title}>{product.title}</Text>
-          <Price amount={product.price} variant="hero" caption={product.saleType === 'AUCTION' ? 'Puja actual' : 'Precio de venta'} />
+          <Price amount={price.amount} variant="hero" caption={price.caption ?? 'Precio de venta'} />
+          {product.description ? <Text style={styles.description}>{product.description}</Text> : null}
         </View>
 
         <View style={styles.section}>
@@ -64,35 +82,42 @@ export default function ProductScreen() {
           </View>
         </View>
 
-        {seller ? (
-          <View style={styles.section}>
-            <SectionHeader title="Vendedor" />
-            <View style={styles.seller}>
-              <Avatar name={seller.name} size={48} />
-              <View style={styles.sellerInfo}>
-                <View style={styles.sellerNameRow}>
-                  <Text style={styles.sellerName}>{seller.name}</Text>
-                  {seller.verified ? (
-                    <Feather name="check-circle" size={16} color={Colors.success} />
-                  ) : null}
-                </View>
-                <Text style={styles.sellerMeta}>
-                  {seller.verified ? 'Vendedor verificado · ' : ''}
-                  {seller.city}
-                </Text>
+        <View style={styles.section}>
+          <SectionHeader title="Vendedor" />
+          <View style={styles.seller}>
+            <Avatar name={product.seller.fullName} size={48} />
+            <View style={styles.sellerInfo}>
+              <View style={styles.sellerNameRow}>
+                <Text style={styles.sellerName}>{own ? 'Tú' : product.seller.fullName}</Text>
+                {product.seller.isVerified ? <Feather name="check-circle" size={16} color={Colors.success} /> : null}
               </View>
+              <Text style={styles.sellerMeta}>{product.seller.isVerified ? 'Vendedor verificado' : 'Vendedor sin verificar'}</Text>
             </View>
           </View>
-        ) : null}
+        </View>
+
+        {detail.contactError ? <Text style={styles.error}>{messageFor(detail.contactError, 'No pudimos abrir el chat.')}</Text> : null}
+        {detail.buyError ? <Text style={styles.error}>{messageFor(detail.buyError, 'No pudimos reservar el vehículo.')}</Text> : null}
       </ScrollView>
 
       <StickyCta>
-        <Button
-          label="Contactar con Vendedor"
-          fullWidth
-          size="lg"
-          onPress={() => router.push(`/chat/${product.id}`)}
-        />
+        {liveAuction ? (
+          <Button label="Ver subasta en vivo" fullWidth size="lg" onPress={() => router.push(`/auction/${liveAuction.id}`)} />
+        ) : myPendingOrder ? (
+          <Button label="Continuar pago" fullWidth size="lg" onPress={() => router.push(`/checkout/${myPendingOrder.id}`)} />
+        ) : buyable ? (
+          <Button label={detail.buying ? 'Reservando…' : 'Comprar ahora'} fullWidth size="lg" disabled={detail.buying} onPress={buy} />
+        ) : null}
+        {own ? null : (
+          <Button
+            label={detail.contacting ? 'Abriendo chat…' : 'Contactar con Vendedor'}
+            variant={liveAuction || buyable || myPendingOrder ? 'secondary' : 'primary'}
+            fullWidth
+            size="lg"
+            disabled={detail.contacting}
+            onPress={contact}
+          />
+        )}
       </StickyCta>
     </View>
   );
@@ -103,19 +128,11 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: Layout.screenX, paddingTop: Spacing.md },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.lg, paddingHorizontal: Layout.screenX },
   missingText: { ...Type.h2, color: Colors.text },
-  stage: {
-    height: 240,
-    borderRadius: Radius.md,
-    backgroundColor: Colors.stageFrom,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: Spacing.sm,
-    overflow: 'hidden',
-  },
-  stageHint: { ...Type.labelSm, color: Colors.textMuted },
   stageBadges: { position: 'absolute', top: Spacing.md, left: Spacing.md, flexDirection: 'row', gap: Spacing.sm },
   section: { marginTop: Spacing.xxl, gap: Spacing.md },
   title: { ...Type.h1, color: Colors.text },
+  description: { ...Type.body, color: Colors.textSecondary },
+  error: { ...Type.caption, color: Colors.danger, marginTop: Spacing.lg },
   specGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.md },
   specCell: {
     width: '47%',

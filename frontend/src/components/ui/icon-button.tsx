@@ -1,7 +1,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { ComponentProps } from 'react';
-import { Colors, FontFamily, Radius, Spacing } from '@/constants/theme';
+import { Colors, FontFamily, Radius } from '@/constants/theme';
 
 type FeatherName = ComponentProps<typeof Feather>['name'];
 

@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 
 import { AppError, asyncHandler } from '../../middleware/error-handler.js';
-import { created, noContent, ok, paginated } from '../../lib/api-response.js';
+import { created, noContent, ok } from '../../lib/api-response.js';
 import { readNumber, readQueryString, requireUuid, Validator } from '../../lib/validate.js';
 import * as orderService from './order.service.js';
 

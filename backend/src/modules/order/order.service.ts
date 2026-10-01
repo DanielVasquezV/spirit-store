@@ -171,10 +171,24 @@ export async function createOrder(
         totalAmount: decimalString(subtotalCents + taxCents),
         status: 'PENDING_PAYMENT',
         paymentStatus: 'PENDING',
-        vehicle: { update: { status: 'RESERVED' } },
       },
       include: ORDER_INCLUDE,
     });
+
+    // La reserva va aparte y no como `vehicle: { update }` anidado: `order.create`
+    // solo acepta `create`/`connect` sobre una relacion to-one, asi que el nested
+    // update no compila ni existe en runtime. Y se hace con `updateMany` filtrando
+    // por `status: 'AVAILABLE'` en vez de `update` por id: el chequeo de arriba es
+    // una lectura y bajo READ COMMITTED dos compras concurrentes pasan las dos,
+    // pero la segunda encuentra `count: 0` y revierte su orden en lugar de
+    // reservar un vehiculo ya reservado.
+    const reserved = await tx.vehicle.updateMany({
+      where: { id: vehicle.id, status: 'AVAILABLE' },
+      data: { status: 'RESERVED' },
+    });
+    if (reserved.count !== 1) {
+      throw AppError.conflict('El vehiculo ya fue reservado por otra compra', { status: 'RESERVED' });
+    }
 
     // La FK vive en CHATS, no al reves: la conversacion es la que se ata a la
     // orden. Sin esto un chat ajeno quedaria enlazado a una compra ajena.

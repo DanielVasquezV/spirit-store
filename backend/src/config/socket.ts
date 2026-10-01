@@ -60,7 +60,9 @@ export const SOCKET_EVENTS = {
     read: 'chat:read',
   },
   diagnostic: {
-    stream: 'diagnostic:stream',
+    // Sin `stream`: la llamada a Gemini no se hace en streaming, asi que el
+    // veredicto llega entero en `done`. Declarar un evento que nadie emite deja
+    // un canal fantasma esperando en el cliente.
     done: 'diagnostic:done',
   },
 } as const;

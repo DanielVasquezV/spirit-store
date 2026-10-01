@@ -111,6 +111,7 @@ export const errorSchemas = {
               'RATE_LIMITED',
               'UPLOAD_UNAVAILABLE',
               'UPLOAD_FAILED',
+              'AI_UNAVAILABLE',
               'INTERNAL_ERROR',
             ],
           },
@@ -698,5 +699,201 @@ export const errorSchemas = {
       status: { type: 'string', enum: ['ok'], example: 'ok' },
       uptime: { type: 'number', description: 'Segundos desde que arrancó el proceso.', example: 187.12 },
     },
+  },
+
+  ChatType: {
+    type: 'string',
+    enum: ['PURCHASE', 'SALE', 'AUCTION_WIN'],
+    description: 'Motivo de la conversación. `PURCHASE` es la consulta común sobre un vehículo.',
+  },
+
+  MessageType: {
+    type: 'string',
+    enum: ['TEXT', 'IMAGE', 'OFFER'],
+    description: '`OFFER` exige `metadata.amount`; una oferta sin monto no significa nada y se rechaza con `400`.',
+  },
+
+  ChatMessage: {
+    type: 'object',
+    required: ['id', 'chatId', 'senderId', 'senderName', 'content', 'messageType', 'isRead', 'createdAt'],
+    description: 'Un mensaje de una conversación.',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      chatId: { type: 'string', format: 'uuid' },
+      senderId: { type: 'string', format: 'uuid' },
+      senderName: { type: 'string' },
+      content: { type: 'string', maxLength: 2000 },
+      messageType: { $ref: '#/components/schemas/MessageType' },
+      metadata: { nullable: true, description: 'Carga útil de `IMAGE` (url) u `OFFER` (monto).' },
+      isRead: { type: 'boolean' },
+      createdAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  ChatPreview: {
+    type: 'object',
+    required: ['id', 'chatType', 'counterpart', 'unreadCount', 'createdAt', 'updatedAt'],
+    description: [
+      'Una conversación tal como aparece en la lista.',
+      '',
+      '`counterpart` es **siempre el otro** participante: el mismo chat se ve',
+      'distinto según quién lo pida, así que el nombre no se puede guardar en la',
+      'fila sino que se deriva de quién consulta.',
+    ].join('\n'),
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      chatType: { $ref: '#/components/schemas/ChatType' },
+      vehicle: {
+        nullable: true,
+        allOf: [{
+          type: 'object',
+          required: ['id', 'title'],
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            title: { type: 'string', example: 'Toyota Corolla' },
+            imageUrl: { type: 'string', nullable: true },
+          },
+        }],
+      },
+      counterpart: {
+        type: 'object',
+        required: ['id', 'fullName'],
+        properties: { id: { type: 'string', format: 'uuid' }, fullName: { type: 'string' } },
+      },
+      lastMessage: { nullable: true, allOf: [{ $ref: '#/components/schemas/ChatMessage' }] },
+      unreadCount: { type: 'integer', description: 'Mensajes del otro sin leer.' },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time', description: 'Se toca con cada mensaje: es el orden de la lista.' },
+    },
+  },
+
+  CreateChatRequest: {
+    type: 'object',
+    required: ['vehicleId'],
+    description: [
+      'Abre (o devuelve) la conversación con el vendedor de un vehículo.',
+      '',
+      'Es idempotente por `vehicleId`: dos toques en "Consultar" devuelven el',
+      'mismo chat en vez de abrir conversaciones paralelas. Consultar sobre un',
+      'vehículo propio se rechaza con `400`.',
+    ].join('\n'),
+    properties: {
+      vehicleId: { type: 'string', format: 'uuid' },
+      chatType: { $ref: '#/components/schemas/ChatType' },
+    },
+  },
+
+  SendMessageRequest: {
+    type: 'object',
+    required: ['content'],
+    properties: {
+      content: { type: 'string', maxLength: 2000 },
+      messageType: { $ref: '#/components/schemas/MessageType' },
+      metadata: { nullable: true, description: 'Obligatorio con `metadata.amount` numérico si `messageType` es `OFFER`.' },
+    },
+  },
+
+  ChatUnread: {
+    type: 'object',
+    required: ['unread'],
+    properties: { unread: { type: 'integer' } },
+  },
+
+  ChatReadResult: {
+    type: 'object',
+    required: ['markedAsRead'],
+    properties: { markedAsRead: { type: 'integer', description: 'Mensajes del otro que pasaron a leídos.' } },
+  },
+
+  DiagnosticSeverity: {
+    type: 'string',
+    enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
+    description: '`HIGH` y `CRITICAL` desaconsejan seguir usando el vehículo.',
+  },
+
+  DiagnosticMessage: {
+    type: 'object',
+    required: ['id', 'sender', 'content', 'createdAt'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      sender: { type: 'string', enum: ['USER', 'AI_ASSISTANT'] },
+      content: { type: 'string' },
+      model: { type: 'string', nullable: true, description: 'Modelo que generó la respuesta. Permite auditar cada versión.' },
+      createdAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  AiDiagnostic: {
+    type: 'object',
+    required: ['id', 'title', 'resolved', 'createdAt', 'updatedAt'],
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      vehicleId: { type: 'string', format: 'uuid', nullable: true },
+      title: { type: 'string', description: 'La falla declarada por el usuario. No cambia con los seguimientos.' },
+      vehicleBrand: { type: 'string', nullable: true },
+      vehicleModel: { type: 'string', nullable: true },
+      vehicleYear: { type: 'integer', nullable: true },
+      mileage: { type: 'integer', nullable: true },
+      symptoms: { nullable: true, description: 'Síntomas estructurados que se inyectan como contexto en el prompt.' },
+      summary: { type: 'string', nullable: true, description: 'Diagnóstico del modelo. Null mientras la llamada está en curso o si falló.' },
+      confidence: { type: 'number', nullable: true, description: 'Confianza normalizada a 0..1.' },
+      severity: { nullable: true, allOf: [{ $ref: '#/components/schemas/DiagnosticSeverity' }] },
+      resolved: { type: 'boolean' },
+      createdAt: { type: 'string', format: 'date-time' },
+      updatedAt: { type: 'string', format: 'date-time' },
+    },
+  },
+
+  AiDiagnosticDetail: {
+    allOf: [
+      { $ref: '#/components/schemas/AiDiagnostic' },
+      {
+        type: 'object',
+        required: ['messages'],
+        properties: { messages: { type: 'array', items: { $ref: '#/components/schemas/DiagnosticMessage' } } },
+      },
+    ],
+  },
+
+  CreateDiagnosticRequest: {
+    type: 'object',
+    required: ['title'],
+    description: [
+      'Crea un diagnóstico y pide el primer análisis a Gemini.',
+      '',
+      'La fila se guarda **antes** de llamar al modelo: si la llamada falla, el',
+      'usuario conserva la pregunta y puede reintentar sin volver a escribirla.',
+      'Por eso un `summary` null no significa que el diagnóstico se perdió.',
+      '',
+      'Con `vehicleId`, los datos de la ficha pisan a los campos sueltos.',
+    ].join('\n'),
+    properties: {
+      title: { type: 'string', maxLength: 120, example: 'Hace un ruido metálico al frenar' },
+      vehicleId: { type: 'string', format: 'uuid' },
+      vehicleBrand: { type: 'string' },
+      vehicleModel: { type: 'string' },
+      vehicleYear: { type: 'integer' },
+      mileage: { type: 'integer' },
+      symptoms: { nullable: true, description: 'Objeto libre con los síntomas que se inyectan al prompt.' },
+    },
+  },
+
+  AskDiagnosticRequest: {
+    type: 'object',
+    required: ['question'],
+    properties: { question: { type: 'string', description: 'Pregunta de seguimiento, con el hilo previo como contexto.' } },
+  },
+
+  DiagnosticAnswer: {
+    type: 'object',
+    required: ['answer'],
+    properties: { answer: { type: 'string' } },
+  },
+
+  DiagnosticAvailability: {
+    type: 'object',
+    required: ['available'],
+    description: 'Permite que la app esconda la función si el servidor no tiene key, en vez de fallar al tocarla.',
+    properties: { available: { type: 'boolean' } },
   },
 } as const;

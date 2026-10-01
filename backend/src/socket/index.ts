@@ -9,6 +9,8 @@ import { verifyAccessToken } from '../lib/jwt.js';
 import { isUuid } from '../lib/validate.js';
 import { prisma } from '../lib/prisma.js';
 import { setAuctionRealtimeSink } from './realtime.js';
+import { setRealtimeSink } from './chat-realtime.js';
+import * as chatService from '../modules/chat/chat.service.js';
 import type { AuthTokenPayload } from '../lib/jwt.js';
 
 // Lo que deja authorizeHandshake. Va en socket.data porque sobrevive a los
@@ -87,6 +89,26 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
     },
   });
 
+  // Los servicios de chat y de diagnostico empujan aca. Se registra junto al
+  // de pujas y antes del handshake, por el mismo motivo: un mensaje que llegue
+  // durante el arranque no debe quedarse sin emitir.
+  setRealtimeSink({
+    chatMessage: (event) => {
+      // A la sala del chat: los dos participantes ya estan adentro, asi que
+      // llega a ambos sin duplicar por salas personales.
+      io.to(SOCKET_ROOMS.chat(event.chatId)).emit(SOCKET_EVENTS.chat.message, event);
+    },
+    chatMessagesRead: (event) => {
+      io.to(SOCKET_ROOMS.chat(event.chatId)).emit(SOCKET_EVENTS.chat.read, event);
+    },
+    diagnosticDone: (event) => {
+      // A la sala personal de quien lo pidio: el socket se une a la suya al
+      // conectar, asi que no hace falta una sala por diagnostico. El
+      // `diagnosticId` viaja en el payload para desambiguar.
+      io.to(SOCKET_ROOMS.user(event.userId)).emit(SOCKET_EVENTS.diagnostic.done, event);
+    },
+  });
+
   io.use(authorizeHandshake);
 
   io.on('connection', (socket) => {
@@ -134,18 +156,70 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
       void socket.leave(SOCKET_ROOMS.auction(payload.auctionId));
     });
 
-    // El chat todavia no tiene servicio ni endpoints, asi que no hay nada que
-    // autorizar: se deja la suscripcion sin validar a proposito para no fingir un
-    // control que no existe. Cuando exista el modulo de chat, aca va el chequeo de
-    // que el chat sea del usuario.
+    // Salas de chat. La pertenencia se valida contra la base: entrar a la sala
+    // es recibir todos los mensajes de esa conversacion, y sin este chequeo
+    // cualquier cuenta autenticada leeria conversaciones ajenas con un uuid.
+    const joinChatRoom = async (chatId: string): Promise<boolean> => {
+      try {
+        // `assertParticipant` tira NOT_FOUND si el chat no es del usuario: es la
+        // misma comprobacion que hacen los endpoints HTTP.
+        await chatService.assertParticipant(chatId, auth.sub);
+        await socket.join(SOCKET_ROOMS.chat(chatId));
+        socket.emit(SOCKET_EVENTS.chat.join, { chatId });
+        return true;
+      } catch {
+        emitError(socket, ERROR_CODES.NOT_FOUND, 'Chat not found');
+        return false;
+      }
+    };
+
     socket.on(SOCKET_EVENTS.chat.join, (payload: { chatId?: unknown } = {}) => {
-      if (typeof payload.chatId !== 'string') return;
-      void socket.join(SOCKET_ROOMS.chat(payload.chatId));
+      const chatId = payload.chatId;
+      if (typeof chatId !== 'string' || !isUuid(chatId)) {
+        emitError(socket, ERROR_CODES.VALIDATION, 'chatId is required');
+        return;
+      }
+      void joinChatRoom(chatId);
     });
 
     socket.on(SOCKET_EVENTS.chat.leave, (payload: { chatId?: unknown } = {}) => {
       if (typeof payload.chatId !== 'string') return;
       void socket.leave(SOCKET_ROOMS.chat(payload.chatId));
+    });
+
+    // Envio de mensajes por socket. Se emite a la sala, no solo de vuelta al
+    // emisor: el remitente lo ve igual, y así no necesita un round-trip extra.
+    socket.on(SOCKET_EVENTS.chat.message, (payload: { chatId?: unknown; content?: unknown } = {}) => {
+      const { chatId, content } = payload;
+      if (typeof chatId !== 'string' || !isUuid(chatId)) {
+        emitError(socket, ERROR_CODES.VALIDATION, 'chatId is required');
+        return;
+      }
+      if (typeof content !== 'string') {
+        emitError(socket, ERROR_CODES.VALIDATION, 'content is required');
+        return;
+      }
+      // Se entra a la sala antes de enviar: el servicio emite a la sala, asi
+      // que el remitente recibe su propio mensaje por esa via y no por un
+      // `socket.emit` aparte (que lo duplicaria).
+      void joinChatRoom(chatId)
+        .then((joined) => (joined ? chatService.sendMessage(chatId, auth.sub, { content }) : undefined))
+        .catch((err: unknown) => {
+          const code = (err as { code?: string })?.code === 'NOT_FOUND'
+            ? ERROR_CODES.NOT_FOUND
+            : ERROR_CODES.VALIDATION;
+          emitError(socket, code, (err as Error)?.message ?? 'No se pudo enviar el mensaje');
+        });
+    });
+
+    socket.on(SOCKET_EVENTS.chat.read, (payload: { chatId?: unknown } = {}) => {
+      const chatId = payload.chatId;
+      if (typeof chatId !== 'string' || !isUuid(chatId)) return;
+      // `markRead` ya emite `chat:read` a la sala cuando hay algo que marcar.
+      // Acá no se reemite al quepidio: lo veria dos veces.
+      void chatService
+        .markRead(chatId, auth.sub)
+        .catch(() => emitError(socket, ERROR_CODES.NOT_FOUND, 'Chat not found'));
     });
 
     socket.on('disconnect', () => {

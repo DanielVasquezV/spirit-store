@@ -386,6 +386,7 @@ export const paths = {
       ],
       responses: {
         200: successEnvelope('#/components/schemas/PublicUser', 'Usuario encontrado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         404: errorResponse('NOT_FOUND', 'User not found'),
       },
@@ -499,6 +500,7 @@ export const paths = {
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: {
         200: successEnvelope('#/components/schemas/Vehicle', 'Vehículo encontrado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         404: errorResponse('NOT_FOUND', 'Vehicle not found'),
       },
     },
@@ -542,6 +544,7 @@ export const paths = {
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: {
         204: noContentResponse('Vehículo dado de baja.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
         404: errorResponse('NOT_FOUND', 'Vehicle not found'),
@@ -604,6 +607,7 @@ export const paths = {
       ],
       responses: {
         204: noContentResponse('Foto quitada de la galería.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'Solo el vendedor que publico el vehiculo puede modificarlo'),
         404: errorResponse('NOT_FOUND', 'Vehicle image not found'),
@@ -665,6 +669,7 @@ export const paths = {
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: {
         200: successEnvelope('#/components/schemas/Auction', 'Subasta encontrada.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         404: errorResponse('NOT_FOUND', 'Auction not found'),
       },
     },
@@ -696,6 +701,7 @@ export const paths = {
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: {
         204: noContentResponse('Subasta cancelada.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
         403: errorResponse('FORBIDDEN', 'Solo el vendedor de la subasta puede modificarla'),
         404: errorResponse('NOT_FOUND', 'Auction not found'),
@@ -817,6 +823,286 @@ export const paths = {
         200: paginatedEnvelope('#/components/schemas/MyBid', 'Página de pujas propias.'),
         400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
         401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+  },
+
+  '/api/chats': {
+    get: {
+      tags: ['Chat'],
+      summary: 'Mis conversaciones',
+      description: [
+        'Del usuario del token, de la más reciente a la más antigua.',
+        '',
+        'Solo trae las conversaciones del usuario, sin filtro posible sobre',
+        'quién: no hay un `userId` en la URL ni en el query.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/ChatPreview', 'Página de conversaciones.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+    post: {
+      tags: ['Chat'],
+      summary: 'Abrir conversación con el vendedor',
+      description: [
+        'Devuelve la conversación con el vendedor del vehículo, creándola si no',
+        'existe.',
+        '',
+        '**Idempotente por vehículo.** El esquema tiene un único',
+        '`@unique([vehicleId,buyerId,sellerId])`, así que dos toques seguidos en',
+        '"Consultar" en vez de abrir dos conversaciones devuelven la misma. Es un',
+        '`upsert` y por eso devuelve `200`, no `201`, cuando ya existía.',
+        '',
+        'Consultar sobre un vehículo propio se rechaza con `400`: un chat consigo',
+        'mismo no tiene contraparte.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateChatRequest' } } },
+      },
+      responses: {
+        200: successEnvelope('#/components/schemas/ChatPreview', 'Conversación existente.'),
+        201: successEnvelope('#/components/schemas/ChatPreview', 'Conversación creada.'),
+        400: errorResponse('VALIDATION_ERROR', 'No podés consultar sobre tu propio vehículo'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+      },
+    },
+  },
+
+  '/api/chats/unread': {
+    get: {
+      tags: ['Chat'],
+      summary: 'Total de mensajes sin leer',
+      description: 'Suma de lo no leído en todas las conversaciones, para el badge de la tab sin tener que paginar la lista.',
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: successEnvelope('#/components/schemas/ChatUnread', 'Cantidad de mensajes sin leer.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+  },
+
+  '/api/chats/{id}/messages': {
+    get: {
+      tags: ['Chat'],
+      summary: 'Historial de la conversación',
+      description: [
+        'De la más nueva a la más vieja, paginado para no cargar el hilo entero.',
+        '',
+        'Un chat ajeno devuelve `404` y no `403`: `assertParticipant` no distingue',
+        'entre "no existe" y "no es tuyo", así que el endpoint no confirma que un',
+        'id ajeno existe.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/ChatMessage', 'Página de mensajes.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Chat not found'),
+      },
+    },
+    post: {
+      tags: ['Chat'],
+      summary: 'Enviar mensaje',
+      description: [
+        'El `senderId` sale del token y el `senderName` se copia del usuario en el',
+        'mismo paso: un cliente no puede escribir en nombre de otro.',
+        '',
+        'Guarda el mensaje, toca `Chat.updatedAt` (que es el orden de la lista de',
+        'conversaciones) y recién entonces emite `chat:message` a la sala del',
+        'chat. Emitir antes del commit le mostraría al otro un mensaje que puede',
+        'fallar y deshacerse.',
+        '',
+        '`messageType` `OFFER` exige `metadata.amount` numérico: una oferta sin',
+        'monto no significa nada y se rechaza con `400`.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/SendMessageRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/ChatMessage', 'Mensaje enviado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Chat not found'),
+      },
+    },
+  },
+
+  '/api/chats/{id}/read': {
+    patch: {
+      tags: ['Chat'],
+      summary: 'Marcar la conversación como leída',
+      description: [
+        'Marca como leídos los mensajes **del otro**. Los propios se marcan al',
+        'escribirlos, así que no se tocan.',
+        '',
+        'Si no había nada pendiente devuelve `markedAsRead: 0` y no emite evento.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        200: successEnvelope('#/components/schemas/ChatReadResult', 'Conversación marcada.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Chat not found'),
+      },
+    },
+  },
+
+  '/api/diagnostics': {
+    get: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Mis diagnósticos',
+      description: [
+        'Del usuario del token, de la más reciente a la más antigua, sin el hilo',
+        'de mensajes: la lista se pide para pintar títulos, el hilo se pide por',
+        'diagnóstico.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'page', in: 'query', required: false, schema: { type: 'integer', minimum: 1, default: 1 } },
+        { name: 'pageSize', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+      ],
+      responses: {
+        200: paginatedEnvelope('#/components/schemas/AiDiagnostic', 'Página de diagnósticos.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+    post: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Pedir un diagnóstico',
+      description: [
+        'Crea el diagnóstico y pide el primer análisis a Gemini.',
+        '',
+        '**La fila se guarda antes de llamar al modelo.** Si la llamada falla, el',
+        'usuario conserva la pregunta y puede reintentar sin volver a escribirla,',
+        'y `summary` queda `null`. Por eso un `summary` null no significa que se',
+        'perdió el diagnóstico: significa que todavía no llegó o que falló, y en',
+        'los dos casos la pregunta está a salvo.',
+        '',
+        'Con `vehicleId` los datos de la ficha pisan a los campos sueltos, así que',
+        'el modelo recibe marca, modelo, año y kilometraje sin que el cliente los',
+        'repita.',
+        '',
+        'Si el servidor no tiene `GEMINI_API_KEY` la llamada responde `503`',
+        '`AI_UNAVAILABLE` **después** de guardar la fila, por lo que tampoco se',
+        'pierde. `GET /diagnostics/availability` permite consultar antes.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/CreateDiagnosticRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/AiDiagnosticDetail', 'Diagnóstico creado, con la respuesta del modelo si respondió.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Vehicle not found'),
+        503: errorResponse('AI_UNAVAILABLE', 'La IA no esta disponible o no respondio'),
+      },
+    },
+  },
+
+  '/api/diagnostics/availability': {
+    get: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Si la IA está disponible',
+      description: [
+        'Dice si el servidor tiene key configurada, para que la app esconda la',
+        'función en vez de dejar tocarla y comerse un `503`.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: successEnvelope('#/components/schemas/DiagnosticAvailability', 'Disponibilidad del asistente.'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+      },
+    },
+  },
+
+  '/api/diagnostics/{id}': {
+    get: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Un diagnóstico con su hilo',
+      description: 'Incluye la conversación con el asistente, de la más vieja a la más nueva. Un id ajeno devuelve `404`.',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        200: successEnvelope('#/components/schemas/AiDiagnosticDetail', 'Diagnóstico con su hilo.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Diagnostic not found'),
+      },
+    },
+  },
+
+  '/api/diagnostics/{id}/ask': {
+    post: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Pregunta de seguimiento',
+      description: [
+        'Guarda la pregunta y pide la respuesta con **el hilo previo como',
+        'contexto**, así que se puede ir profundizando sin repetir el historial.',
+        '',
+        'Cada respuesta guarda el modelo que la generó, para poder auditar qué',
+        'versión del asistente dijo qué.',
+      ].join('\n'),
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/AskDiagnosticRequest' } } },
+      },
+      responses: {
+        201: successEnvelope('#/components/schemas/DiagnosticAnswer', 'Respuesta del asistente.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Diagnostic not found'),
+        503: errorResponse('AI_UNAVAILABLE', 'La IA no esta disponible o no respondio'),
+      },
+    },
+  },
+
+  '/api/diagnostics/{id}/resolved': {
+    patch: {
+      tags: ['Diagnóstico IA'],
+      summary: 'Marcar el diagnóstico como resuelto',
+      description: 'Es reversible: volver a mandar el mismo body lo reabre. No llama al modelo ni borra el hilo.',
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { resolved: { type: 'boolean', default: true, description: 'Omitirlo equivale a `true`.' } },
+            },
+          },
+        },
+      },
+      responses: {
+        200: successEnvelope('#/components/schemas/AiDiagnostic', 'Diagnóstico actualizado.'),
+        400: errorResponse('VALIDATION_ERROR', 'Validation failed'),
+        401: errorResponse('UNAUTHENTICATED', 'Authentication required'),
+        404: errorResponse('NOT_FOUND', 'Diagnostic not found'),
       },
     },
   },

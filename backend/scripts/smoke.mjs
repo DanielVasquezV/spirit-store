@@ -78,7 +78,11 @@ async function req(method, path, { token, body, form } = {}) {
     .split('?')[0]
     .replace(/:([A-Za-z0-9_]+)/g, '{$1}')
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '{id}');
-  const key = `${method} /api${routePath === '/' ? '' : routePath}`;
+  // Express ignora la barra final, asi que `/api/diagnostics` y `/api/diagnostics/`
+  // son la misma ruta y devuelven el mismo status. Sin normalizar, la clave con
+  // barra no resuelve contra la del spec y el chequeo de OpenAPI reporta una
+  // ruta inexistente que en realidad esta documentada.
+  const key = `${method} /api${routePath.replace(/\/+$/, '') || ''}`;
   if (!observed.has(key)) observed.set(key, new Set());
   observed.get(key).add(res.status);
 
@@ -435,136 +439,6 @@ let adminToken = '';
     });
     check('password valida -> 201', okPass.status === 201, `fue ${okPass.status}`);
   }
-}
-
-section('Documentacion OpenAPI (/docs, /docs.json)');
-{
-  const origin = BASE.replace(/\/api\/?$/, '');
-  const spec = await fetch(`${origin}/docs.json`);
-  const doc = await spec.json();
-
-  check('/docs.json responde 200', spec.status === 200, `fue ${spec.status}`);
-  check('openapi 3.x', /^3\./.test(doc?.openapi ?? ''), `version ${doc?.openapi}`);
-  check('tiene info.title', Boolean(doc?.info?.title));
-  check('declara el esquema bearer', Boolean(doc?.components?.securitySchemes?.bearerAuth));
-
-  // Cada $ref escrito a mano es un typo esperando: si no resuelve, la UI de
-  // Swagger renderiza un panel vacio sin avisar.
-  const refs = [];
-  (function walk(node) {
-    if (Array.isArray(node)) { node.forEach(walk); return; }
-    if (node && typeof node === 'object') {
-      for (const [k, v] of Object.entries(node)) {
-        if (k === '$ref' && typeof v === 'string') refs.push(v);
-        else walk(v);
-      }
-    }
-  })(doc);
-
-  check('el spec usa $ref', refs.length > 0, 'no se encontro ningun $ref');
-  const dangling = refs.filter((r) => {
-    if (!r.startsWith('#/')) return true;
-    let cur = doc;
-    for (const seg of r.slice(2).split('/')) {
-      if (cur == null || !(seg in cur)) return true;
-      cur = cur[seg];
-    }
-    return false;
-  });
-  check(`los ${refs.length} $ref resuelven`, dangling.length === 0, `rotos: ${dangling.join(', ')}`);
-
-  // Deriva: si se agrega una ruta y no se documenta, este test falla. Se leen
-  // los archivos de rutas en vez de mantener a mano una lista de endpoints
-  // (que es justamente lo que se desactualiza en silencio) y en vez de
-  // inspeccionar el router de Express, que en la v5 expone internals que no
-  // dicen el prefijo de montaje.
-  const documented = new Set(Object.keys(doc?.paths ?? {}));
-  const declared = [];  try {
-    const { readFileSync, readdirSync } = await import('node:fs');
-    const { resolve: r, dirname: d } = await import('node:path');
-    const root = r(here, '..');
-
-    const index = readFileSync(r(root, 'src/routes/index.ts'), 'utf8');
-    // router.use('/auth', authRoutes)  ->  authRoutes se monta en /api/auth
-    const mounts = new Map();
-    for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) {
-      mounts.set(m[2], `/api${m[1]}`);
-    }
-    for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) void m;
-
-    // Las rutas declaradas dentro del propio index cuelgan de /api.
-    for (const m of index.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
-      declared.push(`/api${m[2] === '/' ? '' : m[2]}`);
-    }
-
-    const modulesDir = r(root, 'src/modules');
-    for (const mod of readdirSync(modulesDir, { withFileTypes: true })) {
-      if (!mod.isDirectory()) continue;
-      const files = readdirSync(r(modulesDir, mod.name));
-      for (const file of files) {
-        if (!file.endsWith('.routes.ts')) continue;
-        const src = readFileSync(r(modulesDir, mod.name, file), 'utf8');
-        // El nombre del router importado en routes/index.ts.
-        const imported = index.match(new RegExp(`import\\s+(\\w+)\\s+from\\s+'\\.\\./modules/${mod.name}/`));
-        const prefix = imported ? (mounts.get(imported[1]) ?? null) : null;
-        if (prefix === null) continue;
-        for (const m of src.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
-          declared.push(`${prefix}${m[2] === '/' ? '' : m[2]}`);
-        }
-      }
-    }
-    // La raiz la declara app.ts con app.get('/'), no con un router montado.
-    const appSrc = readFileSync(r(root, 'src/app.ts'), 'utf8');
-    for (const m of appSrc.matchAll(/app\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
-      declared.push(m[2]);
-    }
-  } catch (err) {
-    skipTest('deriva rutas vs spec', `no se pudieron leer las rutas: ${err.message}`);
-  }
-
-  // Express escribe los parametros de ruta como `:id`; OpenAPI como `{id}`.
-  // Sin esta normalizacion las dos listas nunca coinciden.
-  const toOpenApiPath = (p) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-  const normalized = [...new Set(declared)].map(toOpenApiPath);
-
-  const undocumented = normalized.filter((p) => !documented.has(p));
-  const phantom = [...documented]
-    .filter((p) => !p.startsWith('/docs'))
-    .filter((p) => !normalized.includes(p));
-  check(
-    `las ${normalized.length} rutas del codigo estan documentadas`,
-    undocumented.length === 0,
-    undocumented.length ? `sin documentar: ${undocumented.join(', ')}` : '',
-  );
-  check('el spec no documenta rutas inexistentes', phantom.length === 0,
-    phantom.length ? `fantasmas: ${phantom.join(', ')}` : '');
-
-  // El spec tiene que describir los status que la API devuelve de verdad. Un
-  // 200 documentado donde la API responde 201 hace que el cliente mal escrito
-  //   nunca falle en local, que es la forma mas cara de romper algo sin notarse.
-  const statusMismatch = [];
-  for (const [key, statuses] of observed) {
-    const space = key.indexOf(' ');
-    const method = key.slice(0, space);
-    const path = key.slice(space + 1);
-    const op = doc?.paths?.[path]?.[method.toLowerCase()];
-    if (!op) { statusMismatch.push(`${key}: no esta en el spec`); continue; }
-    for (const status of statuses) {
-      if (!(String(status) in (op.responses ?? {}))) {
-        statusMismatch.push(`${key} -> ${status} (el spec declara ${Object.keys(op.responses).join(', ')})`);
-      }
-    }
-  }
-  check(
-    `los ${observed.size} endpoints probados declaran su status real`,
-    statusMismatch.length === 0,
-    statusMismatch.join(' | '),
-  );
-
-  const html = await fetch(`${origin}/docs/`);
-  const body = await html.text();
-  check('/docs responde 200', html.status === 200, `fue ${html.status}`);
-  check('/docs renderiza Swagger UI', /swagger-ui/i.test(body));
 }
 
 // ---------------------------------------------------------------------------
@@ -1400,6 +1274,329 @@ section('Socket.IO (handshake)');
 }
 
 // ---------------------------------------------------------------------------
+// Chat.
+//
+// El par es el vendedor (`sellerToken`, duenno del vehiculo) y un postor. El
+// tercero (`b2`) hace de ajeno: que no pueda ni leer el hilo ni entrar a la sala
+// es la parte interesante, porque es la que un endpoint con `chatId` suelta
+// dejaria abierta.
+
+section('POST /api/chats (abrir conversacion)');
+const chatVehicleId = await mkVehicle('chat');
+let chatId = '';
+{
+  const first = await req('POST', '/chats', { token: b1.token, body: { vehicleId: chatVehicleId } });
+  check('abrir chat -> 201', first.status === 201, `fue ${first.status} ${JSON.stringify(first.json)}`);
+  chatId = first.json?.data?.id ?? '';
+  check('  ...la contraparte es el vendedor', first.json?.data?.counterpart?.id === sellerId,
+    JSON.stringify(first.json?.data?.counterpart));
+  check('  ...con nombre', typeof first.json?.data?.counterpart?.fullName === 'string'
+    && first.json.data.counterpart.fullName.length > 0);
+  check('  ...y el vehiculo de contexto', first.json?.data?.vehicle?.id === chatVehicleId);
+  check('  ...con titulo derivado de marca y modelo', /Toyota Corolla/.test(first.json?.data?.vehicle?.title ?? ''),
+    `llego ${JSON.stringify(first.json?.data?.vehicle?.title)}`);
+
+  // Idempotencia: dos toques en "Consultar" no pueden dejar dos hilos que el
+  // usuario no sabe distinguir.
+  const again = await req('POST', '/chats', { token: b1.token, body: { vehicleId: chatVehicleId } });
+  check('reabrir el mismo vehiculo -> 200, no 201', again.status === 200, `fue ${again.status}`);
+  check('  ...devuelve el mismo chat', again.json?.data?.id === chatId,
+    `${again.json?.data?.id} vs ${chatId}`);
+
+  const own = await req('POST', '/chats', { token: sellerToken, body: { vehicleId: chatVehicleId } });
+  check('consultar sobre tu propio vehiculo -> 400', own.status === 400, `fue ${own.status}`);
+  check('  ...con el detalle en el campo que fallo', Boolean(own.json?.error?.details?.vehicleId),
+    JSON.stringify(own.json?.error?.details));
+
+  const missing = await req('POST', '/chats', {
+    token: b1.token,
+    body: { vehicleId: '00000000-0000-0000-0000-000000000000' },
+  });
+  check('vehiculo inexistente -> 404', missing.status === 404, `fue ${missing.status}`);
+}
+
+section('GET /api/chats (lista)');
+{
+  const mine = await req('GET', '/chats', { token: b1.token });
+  check('listar -> 200', mine.status === 200, `fue ${mine.status}`);
+  const rows = mine.json?.data ?? [];
+  const row = rows.find((c) => c.id === chatId);
+  check('  ...aparece el chat abierto', Boolean(row), JSON.stringify(rows.map((c) => c.id)));
+  check('  ...la contraparte es el vendedor, no uno mismo', row?.counterpart?.id === sellerId,
+    JSON.stringify(row?.counterpart));
+  check('  ...sin leer en cero todavia', row?.unreadCount === 0, `llego ${row?.unreadCount}`);
+
+  const other = await req('GET', '/chats', { token: b3.token });
+  const leaked = (other.json?.data ?? []).some((c) => c.id === chatId);
+  check('  ...otro usuario no lo ve en su lista', leaked === false,
+    JSON.stringify((other.json?.data ?? []).map((c) => c.id)));
+}
+
+section('POST/GET /api/chats/:id/messages');
+{
+  const empty = await req('POST', `/chats/${chatId}/messages`, { token: b1.token, body: { content: '   ' } });
+  check('mensaje vacio -> 400', empty.status === 400, `fue ${empty.status}`);
+
+  const noAmount = await req('POST', `/chats/${chatId}/messages`, {
+    token: b1.token, body: { content: 'te lo llevo por 500', messageType: 'OFFER' },
+  });
+  check('oferta sin monto -> 400', noAmount.status === 400, `fue ${noAmount.status}`);
+  check('  ...con el detalle en metadata', Boolean(noAmount.json?.error?.details?.metadata),
+    JSON.stringify(noAmount.json?.error?.details));
+
+  const sent = await req('POST', `/chats/${chatId}/messages`, {
+    token: b1.token, body: { content: 'Hola, sigue disponible?' },
+  });
+  check('enviar -> 201', sent.status === 201, `fue ${sent.status}`);
+  check('  ...el remitente sale del token, no del cuerpo', sent.json?.data?.senderId === b1.id,
+    JSON.stringify(sent.json?.data));
+  check('  ...con el nombre del remitente resuelto', sent.json?.data?.senderName === 'Pujador b1',
+    JSON.stringify(sent.json?.data?.senderName));
+  // `isRead` es "lo leyó la contraparte", no "lo leí yo": el schema tiene un solo
+  // booleano por mensaje. Un mensaje propio sale en false y el cliente lo
+  // compara con senderId; por eso el no-leído se ve en el otro, más abajo.
+  check('  ...y nace sin leer para la contraparte', sent.json?.data?.isRead === false,
+    `llego ${sent.json?.data?.isRead}`);
+
+  const history = await req('GET', `/chats/${chatId}/messages`, { token: sellerToken });
+  check('el vendedor lee el hilo -> 200', history.status === 200, `fue ${history.status}`);
+  const rows = history.json?.data ?? [];
+  check('  ...y ve el mensaje del comprador', rows.some((m) => m.content === 'Hola, sigue disponible?'),
+    JSON.stringify(rows.map((m) => m.content)));
+
+  const foreign = await req('GET', `/chats/${chatId}/messages`, { token: b2.token });
+  check('un tercero lee el hilo -> 404, no 403', foreign.status === 404, `fue ${foreign.status}`);
+  const foreignSend = await req('POST', `/chats/${chatId}/messages`, {
+    token: b2.token, body: { content: 'hola' },
+  });
+  check('  ...tampoco puede escribir', foreignSend.status === 404, `fue ${foreignSend.status}`);
+}
+
+section('GET /api/chats/unread y PATCH /api/chats/:id/read');
+{
+  const sellerBefore = await req('GET', '/chats/unread', { token: sellerToken });
+  check('sin leer del vendedor -> 200', sellerBefore.status === 200, `fue ${sellerBefore.status}`);
+  check('  ...cuenta el mensaje del comprador', sellerBefore.json?.data?.unread >= 1,
+    JSON.stringify(sellerBefore.json?.data));
+
+  const marked = await req('PATCH', `/chats/${chatId}/read`, { token: sellerToken });
+  check('marcar leido -> 200', marked.status === 200, `fue ${marked.status}`);
+  check('  ...devuelve cuantos marco', marked.json?.data?.markedAsRead >= 1,
+    JSON.stringify(marked.json?.data));
+
+  const sellerAfter = await req('GET', '/chats/unread', { token: sellerToken });
+  check('  ...el total baja a cero', sellerAfter.json?.data?.unread === 0,
+    JSON.stringify(sellerAfter.json?.data));
+
+  const buyerUnread = await req('GET', '/chats/unread', { token: b1.token });
+  check('  ...y el comprador no tiene nada sin leer (son suyos)', buyerUnread.json?.data?.unread === 0,
+    JSON.stringify(buyerUnread.json?.data));
+
+  const foreign = await req('PATCH', `/chats/${chatId}/read`, { token: b2.token });
+  check('un tercero marcar leido -> 404', foreign.status === 404, `fue ${foreign.status}`);
+}
+
+section('Chat en vivo por socket');
+{
+  const { io } = await import('socket.io-client');
+
+  // El vendedor escucha su sala. El que escribe va por HTTP a proposito: el
+  // envio por socket no es un camino alternativo, es el mismo servicio, asi que
+  // si el evento saliera solo del handler de socket un cliente con la app
+  // abierta no veria los mensajes que otro manda desde el navegador.
+  const watcher = await new Promise((resolve) => {
+    const socket = io(BASE.replace('/api', ''), {
+      transports: ['websocket'], auth: { token: sellerToken }, reconnection: false, timeout: 5000,
+    });
+    const received = { messages: [], reads: [], errors: [] };
+    socket.on('connection:error', (e) => received.errors.push(e));
+    socket.on('chat:message', (payload) => received.messages.push(payload));
+    socket.on('chat:read', (payload) => received.reads.push(payload));
+    socket.on('connection:ready', () => {
+      // La sala valida contra la base: sin esto, un uuid inexistente entraba igual.
+      socket.emit('chat:join', { chatId: '00000000-0000-0000-0000-000000000000' });
+      setTimeout(() => {
+        socket.emit('chat:join', { chatId });
+        setTimeout(() => resolve({ socket, received }), 300);
+      }, 300);
+    });
+    setTimeout(() => resolve({ socket, received }), 6000);
+  });
+
+  await req('POST', `/chats/${chatId}/messages`, {
+    token: b1.token, body: { content: 'Tambien lo compro al contado.' },
+  });
+  await sleep(500);
+
+  const got = watcher.received.messages.find((m) => m.message?.content === 'Tambien lo compro al contado.');
+  check('el mensaje guardado por HTTP llega por socket', Boolean(got),
+    JSON.stringify(watcher.received.messages));
+  check('  ...con el chatId y el mensaje completo', got?.chatId === chatId && got?.message?.senderId === b1.id,
+    JSON.stringify(got));
+  check('entrar a la sala de un chat ajeno o inexistente -> error',
+    watcher.received.errors.some((e) => e.code === 'NOT_FOUND'), JSON.stringify(watcher.received.errors));
+
+  // Marcar leido por HTTP tambien emite: la contraparte ve su badge bajando sin
+  // tener que recargar. Queda un mensaje sin leer porque el de arriba todavia no
+  // se marco.
+  await req('PATCH', `/chats/${chatId}/read`, { token: sellerToken });
+  await sleep(400);
+  check('marcar leido por HTTP emite chat:read a la sala', watcher.received.reads.length > 0,
+    JSON.stringify(watcher.received.reads));
+  check('  ...con cuantos se marcaron', watcher.received.reads[0]?.count >= 1,
+    JSON.stringify(watcher.received.reads[0]));
+  check('  ...y quien los leyo', watcher.received.reads[0]?.readerId === sellerId,
+    JSON.stringify(watcher.received.reads[0]?.readerId));
+
+  watcher.socket.close();
+  await sleep(100);
+}
+
+// ---------------------------------------------------------------------------
+
+section('Diagnostico por IA');
+{
+  // Sin key el modelo no corre, pero el dominio tiene que seguir siendo usable:
+  // se prueba el camino de la IA caida, que es el que se ejecuta en dev y en CI.
+  const avail = await req('GET', '/diagnostics/availability', { token: b1.token });
+  check('GET /diagnostics/availability -> 200', avail.status === 200, `fue ${avail.status}`);
+  const aiOn = avail.json?.data?.available === true;
+  check('  ...informa si hay key cargada', typeof aiOn === 'boolean', JSON.stringify(avail.json?.data));
+
+  // La validacion de la entrada va antes que la disponibilidad de la IA: el
+  // mismo request no puede dar 404 o 400 segun como este configurado el server.
+  const badVehicle = await req('POST', '/diagnostics', {
+    token: b1.token,
+    body: { title: 'Ruido', vehicleId: '00000000-0000-0000-0000-000000000000' },
+  });
+  check('vehiculo inexistente -> 404 (aunque no haya IA)', badVehicle.status === 404,
+    `fue ${badVehicle.status} ${JSON.stringify(badVehicle.json?.error)}`);
+
+  const noTitle = await req('POST', '/diagnostics', { token: b1.token, body: { title: '  ' } });
+  check('sin sintoma -> 400', noTitle.status === 400, `fue ${noTitle.status}`);
+
+  const longTitle = await req('POST', '/diagnostics', { token: b1.token, body: { title: 'x'.repeat(121) } });
+  check('sintoma de 121 caracteres -> 400', longTitle.status === 400, `fue ${longTitle.status}`);
+
+  const before = await req('GET', '/diagnostics', { token: b1.token });
+  const beforeIds = (before.json?.data ?? []).map((d) => d.id);
+
+  const created = await req('POST', '/diagnostics', {
+    token: b1.token,
+    body: {
+      title: 'Hace un ruido metalico al frenar',
+      vehicleBrand: 'Toyota', vehicleModel: 'Corolla', vehicleYear: 2021, mileage: 82000,
+      symptoms: { ruido: 'metalico', cuando: 'al frenar' },
+    },
+  });
+  check('crear diagnostico responde 201 o 503', created.status === 201 || created.status === 503,
+    `fue ${created.status} ${JSON.stringify(created.json?.error)}`);
+
+  const diagId = created.json?.data?.id ?? '';
+
+  if (!aiOn) {
+    // Sin key no se crea nada: una fila sin veredicto seria un diagnostico que
+    // el usuario nunca pidio y que queda en su lista para siempre.
+    check('sin key -> 503 AI_UNAVAILABLE',
+      created.status === 503 && created.json?.error?.code === 'AI_UNAVAILABLE',
+      `fue ${created.status} ${JSON.stringify(created.json?.error)}`);
+    const after = await req('GET', '/diagnostics', { token: b1.token });
+    check('  ...y no deja un diagnostico a medias',
+      (after.json?.data ?? []).map((d) => d.id).join() === beforeIds.join(),
+      JSON.stringify((after.json?.data ?? []).map((d) => d.title)));
+
+    // Lo que si se puede probar sin key: la fila del usuario no se toca.
+    const noQuestion = await req('POST', '/diagnostics/00000000-0000-0000-0000-000000000000/ask', {
+      token: b1.token, body: { question: 'hola' },
+    });
+    check('preguntar a un diagnostico inexistente -> 404', noQuestion.status === 404,
+      `fue ${noQuestion.status}`);
+    skipTest('veredicto, severidad y seguimiento del modelo', 'sin GEMINI_API_KEY');
+  } else if (!diagId) {
+    // Hay key pero el proveedor fallo (cuota, saturacion). Se omite el bloque
+    // en vez de seguir adelante con un id vacio: `GET /diagnostics/` seria el
+    // listado, no el detalle, y el test estariaInsetscribiendo el 200 de una
+    // ruta como si fuera el veredicto del modelo.
+    skipTest('veredicto, severidad y seguimiento del modelo',
+      `la creacion fallo con ${created.status}: ${created.json?.error?.code ?? 'sin codigo'}`);
+  } else {
+    check('con key -> 201 con veredicto', created.status === 201, `fue ${created.status}`);
+    const detail = await req('GET', `/diagnostics/${diagId}`, { token: b1.token });
+    check('  ...la respuesta quedo en el hilo',
+      (detail.json?.data?.messages ?? []).some((m) => m.sender === 'AI_ASSISTANT'),
+      JSON.stringify(detail.json?.data?.messages?.map((m) => m.sender)));
+    check('  ...con severidad y confianza en rango',
+      ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(detail.json?.data?.severity)
+      && detail.json?.data?.confidence >= 0 && detail.json?.data?.confidence <= 1,
+      JSON.stringify({ severity: detail.json?.data?.severity, confidence: detail.json?.data?.confidence }));
+    check('  ...y con el modelo que la genero',
+      (detail.json?.data?.messages ?? []).some((m) => m.sender === 'AI_ASSISTANT' && Boolean(m.model)),
+      JSON.stringify(detail.json?.data?.messages));
+  }
+
+  // Con IA disponible se crea uno para seguir probando el resto del dominio.
+  // Sin key se crea a mano por prisma, para no dejar el resto sin cubrir.
+  let diagForRest = diagId;
+  if (!diagId) {
+    const { prisma: p } = await import('../src/lib/prisma.js');
+    const row = await p.aiDiagnostic.create({
+      data: {
+        userId: b1.id,
+        title: 'Hace un ruido metalico al frenar',
+        vehicleBrand: 'Toyota', vehicleModel: 'Corolla', vehicleYear: 2021, mileage: 82000,
+        symptoms: { ruido: 'metalico', cuando: 'al frenar' },
+      },
+    });
+    await p.aiDiagnosticMessage.create({ data: { diagnosticId: row.id, sender: 'USER', content: row.title } });
+    diagForRest = row.id;
+  }
+
+  const detail = await req('GET', `/diagnostics/${diagForRest}`, { token: b1.token });
+  check('la pregunta quedo guardada', detail.status === 200, `fue ${detail.status}`);
+  check('  ...con el sintoma del usuario en el hilo',
+    (detail.json?.data?.messages ?? []).some((m) => m.sender === 'USER' && /ruido metalico/.test(m.content)),
+    JSON.stringify(detail.json?.data?.messages));
+  check('  ...y los datos del vehiculo para el prompt', detail.json?.data?.vehicleBrand === 'Toyota'
+    && detail.json?.data?.mileage === 82000, JSON.stringify(detail.json?.data));
+
+  const list = await req('GET', '/diagnostics', { token: b1.token });
+  check('listar diagnosticos -> 200', list.status === 200, `fue ${list.status}`);
+  check('  ...incluye el creado', (list.json?.data ?? []).some((d) => d.id === diagForRest),
+    JSON.stringify((list.json?.data ?? []).map((d) => d.id)));
+  check('  ...sin el hilo (la lista es para pintar titulos)',
+    !(list.json?.data ?? []).some((d) => 'messages' in d));
+
+  const foreign = await req('GET', `/diagnostics/${diagForRest}`, { token: b2.token });
+  check('un tercero lee el diagnostico -> 404', foreign.status === 404, `fue ${foreign.status}`);
+
+  const resolved = await req('PATCH', `/diagnostics/${diagForRest}/resolved`, { token: b1.token });
+  check('marcar resuelto -> 200', resolved.status === 200, `fue ${resolved.status}`);
+  check('  ...queda en true', resolved.json?.data?.resolved === true);
+  const reopened = await req('PATCH', `/diagnostics/${diagForRest}/resolved`, {
+    token: b1.token, body: { resolved: false },
+  });
+  check('  ...y es reversible', reopened.json?.data?.resolved === false);
+
+  const noQuestion = await req('POST', `/diagnostics/${diagForRest}/ask`, {
+    token: b1.token, body: { question: '  ' },
+  });
+  check('pregunta vacia -> 400', noQuestion.status === 400, `fue ${noQuestion.status}`);
+
+  const foreignAsk = await req('POST', `/diagnostics/${diagForRest}/ask`, {
+    token: b2.token, body: { question: 'hola' },
+  });
+  check('un tercero pregunta -> 404', foreignAsk.status === 404, `fue ${foreignAsk.status}`);
+}
+
+section('Disponibilidad de la IA sin sesion');
+{
+  const anon = await req('GET', '/diagnostics/availability');
+  check('sin token -> 401', anon.status === 401, `fue ${anon.status}`);
+  const anonChats = await req('GET', '/chats');
+  check('chats sin token -> 401', anonChats.status === 401, `fue ${anonChats.status}`);
+}
+
+// ---------------------------------------------------------------------------
 
 section('Invariante de cierre (barrido de todas las subastas)');
 {
@@ -1535,6 +1732,185 @@ section('Invariante de cierre (barrido de todas las subastas)');
 
 // ---------------------------------------------------------------------------
 
+// Va al final a proposito: el chequeo de "el spec declara el status que la API
+// devuelve de verdad" cruza `observed`, que se llena en cada `req()`. Si esta
+// seccion corriera temprano, como hacia antes, solo cruzaria los endpoints
+// probados hasta ese punto y el resto del contrato quedaria sin verificar.
+/**
+ * Busca la operacion del spec que corresponde a una clave observada.
+ *
+ * No puede ser una busqueda literal: `req()` normaliza todo uuid a `{id}`, asi
+ * que la clave de `DELETE /vehicles/{id}/images/{id}` no se parece a la del spec,
+ * que llama al parametro `{imageId}`; y hay probes a proposito que mandan un id
+ * que no es un uuid. Comparando por forma de path, `/api/vehicles/lo-que-sea`
+ * resuelve contra `/api/vehicles/{id}`, que es justo lo que hay que verificar.
+ */
+function resolveOperation(doc, method, path) {
+  const exact = doc?.paths?.[path]?.[method];
+  if (exact) return { path, op: exact };
+
+  // Entre los candidatos que matchean gana el mas especifico. Devolver el
+  // primero que aparezca depende del orden de insercion del objeto, asi que con
+  // `/chats/unread` y `/chats/{id}` en el spec la resolucion puede dar distinto
+  // segun como se haya construido el documento. Se ordena por menos parametros
+  // primero (un literal le gana a un placeholder) y, a igual, por prefijo
+  // literal mas largo: `/chats/{chatId}/messages` le gana a `/chats/{id}`.
+  const pattern = (p) =>
+    new RegExp(`^${p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\{[^}]+\\\}/g, '[^/]+')}$`);
+
+  let best = null;
+  let bestParams = Infinity;
+  let bestLiteral = -1;
+
+  for (const [specPath, item] of Object.entries(doc?.paths ?? {})) {
+    const op = item[method];
+    if (!op || !pattern(specPath).test(path)) continue;
+
+    const params = (specPath.match(/\{[^}]+\}/g) ?? []).length;
+    const literal = specPath.length - specPath.replace(/\{[^}]+\}/g, '').length;
+
+    if (best === null || params < bestParams || (params === bestParams && literal > bestLiteral)) {
+      best = { path: specPath, op };
+      bestParams = params;
+      bestLiteral = literal;
+    }
+  }
+
+  return best;
+}
+
+section('Documentacion OpenAPI (/docs, /docs.json)');
+{
+  const origin = BASE.replace(/\/api\/?$/, '');
+  const spec = await fetch(`${origin}/docs.json`);
+  const doc = await spec.json();
+
+  check('/docs.json responde 200', spec.status === 200, `fue ${spec.status}`);
+  check('openapi 3.x', /^3\./.test(doc?.openapi ?? ''), `version ${doc?.openapi}`);
+  check('tiene info.title', Boolean(doc?.info?.title));
+  check('declara el esquema bearer', Boolean(doc?.components?.securitySchemes?.bearerAuth));
+
+  // Cada $ref escrito a mano es un typo esperando: si no resuelve, la UI de
+  // Swagger renderiza un panel vacio sin avisar.
+  const refs = [];
+  (function walk(node) {
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        if (k === '$ref' && typeof v === 'string') refs.push(v);
+        else walk(v);
+      }
+    }
+  })(doc);
+
+  check('el spec usa $ref', refs.length > 0, 'no se encontro ningun $ref');
+  const dangling = refs.filter((r) => {
+    if (!r.startsWith('#/')) return true;
+    let cur = doc;
+    for (const seg of r.slice(2).split('/')) {
+      if (cur == null || !(seg in cur)) return true;
+      cur = cur[seg];
+    }
+    return false;
+  });
+  check(`los ${refs.length} $ref resuelven`, dangling.length === 0, `rotos: ${dangling.join(', ')}`);
+
+  // Deriva: si se agrega una ruta y no se documenta, este test falla. Se leen
+  // los archivos de rutas en vez de mantener a mano una lista de endpoints
+  // (que es justamente lo que se desactualiza en silencio) y en vez de
+  // inspeccionar el router de Express, que en la v5 expone internals que no
+  // dicen el prefijo de montaje.
+  const documented = new Set(Object.keys(doc?.paths ?? {}));
+  const declared = [];  try {
+    const { readFileSync, readdirSync } = await import('node:fs');
+    const { resolve: r, dirname: d } = await import('node:path');
+    const root = r(here, '..');
+
+    const index = readFileSync(r(root, 'src/routes/index.ts'), 'utf8');
+    // router.use('/auth', authRoutes)  ->  authRoutes se monta en /api/auth
+    const mounts = new Map();
+    for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) {
+      mounts.set(m[2], `/api${m[1]}`);
+    }
+    for (const m of index.matchAll(/router\.use\(\s*'(\/[^']*)'\s*,\s*(\w+)/g)) void m;
+
+    // Las rutas declaradas dentro del propio index cuelgan de /api.
+    for (const m of index.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
+      declared.push(`/api${m[2] === '/' ? '' : m[2]}`);
+    }
+
+    const modulesDir = r(root, 'src/modules');
+    for (const mod of readdirSync(modulesDir, { withFileTypes: true })) {
+      if (!mod.isDirectory()) continue;
+      const files = readdirSync(r(modulesDir, mod.name));
+      for (const file of files) {
+        if (!file.endsWith('.routes.ts')) continue;
+        const src = readFileSync(r(modulesDir, mod.name, file), 'utf8');
+        // El nombre del router importado en routes/index.ts.
+        const imported = index.match(new RegExp(`import\\s+(\\w+)\\s+from\\s+'\\.\\./modules/${mod.name}/`));
+        const prefix = imported ? (mounts.get(imported[1]) ?? null) : null;
+        if (prefix === null) continue;
+        for (const m of src.matchAll(/router\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
+          declared.push(`${prefix}${m[2] === '/' ? '' : m[2]}`);
+        }
+      }
+    }
+    // La raiz la declara app.ts con app.get('/'), no con un router montado.
+    const appSrc = readFileSync(r(root, 'src/app.ts'), 'utf8');
+    for (const m of appSrc.matchAll(/app\.(get|post|put|patch|delete)\(\s*'([^']*)'/g)) {
+      declared.push(m[2]);
+    }
+  } catch (err) {
+    skipTest('deriva rutas vs spec', `no se pudieron leer las rutas: ${err.message}`);
+  }
+
+  // Express escribe los parametros de ruta como `:id`; OpenAPI como `{id}`.
+  // Sin esta normalizacion las dos listas nunca coinciden.
+  const toOpenApiPath = (p) => p.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+  const normalized = [...new Set(declared)].map(toOpenApiPath);
+
+  const undocumented = normalized.filter((p) => !documented.has(p));
+  const phantom = [...documented]
+    .filter((p) => !p.startsWith('/docs'))
+    .filter((p) => !normalized.includes(p));
+  check(
+    `las ${normalized.length} rutas del codigo estan documentadas`,
+    undocumented.length === 0,
+    undocumented.length ? `sin documentar: ${undocumented.join(', ')}` : '',
+  );
+  check('el spec no documenta rutas inexistentes', phantom.length === 0,
+    phantom.length ? `fantasmas: ${phantom.join(', ')}` : '');
+
+  // El spec tiene que describir los status que la API devuelve de verdad. Un
+  // 200 documentado donde la API responde 201 hace que el cliente mal escrito
+  //   nunca falle en local, que es la forma mas cara de romper algo sin notarse.
+  const statusMismatch = [];
+  for (const [key, statuses] of observed) {
+    const space = key.indexOf(' ');
+    const method = key.slice(0, space);
+    const path = key.slice(space + 1);
+    const found = resolveOperation(doc, method.toLowerCase(), path);
+    if (!found) { statusMismatch.push(`${key}: no esta en el spec`); continue; }
+    for (const status of statuses) {
+      if (!(String(status) in (found.op.responses ?? {}))) {
+        statusMismatch.push(`${key} -> ${status} (el spec declara ${Object.keys(found.op.responses).join(', ')})`);
+      }
+    }
+  }
+  check(
+    `los ${observed.size} endpoints probados declaran su status real`,
+    statusMismatch.length === 0,
+    statusMismatch.join(' | '),
+  );
+
+  const html = await fetch(`${origin}/docs/`);
+  const body = await html.text();
+  check('/docs responde 200', html.status === 200, `fue ${html.status}`);
+  check('/docs renderiza Swagger UI', /swagger-ui/i.test(body));
+}
+
+// ---------------------------------------------------------------------------
+
 console.log(`\n${'='.repeat(52)}`);
 console.log(`  ${pass} ok  |  ${fail} fallas  |  ${skip} omitidos`);
 console.log(`  base: ${BASE}`);
@@ -1555,15 +1931,37 @@ if (process.env.SMOKE_CLEANUP === '0') {
       // El orden lo imponen los FKs: auctions.vehicleId y vehicles.sellerId son
       // Restrict, asi que los vehiculos (y sus subastas) tienen que caer antes
       // que los usuarios. Las imagenes y las pujas van en cascada.
+      //
+      // Chats y diagnosticos se borran a mano porque sus mensajes cuelgan por
+      // `onDelete: Restrict` del usuario que los escribio: dejarlos rompe el
+      // borrado de los usuarios con `chats_sellerId_fkey`.
       const sellers = await prisma.user.findMany({ where: { email: { startsWith: 'smoke.' } }, select: { id: true } });
       const sellerIds = sellers.map((u) => u.id);
       const owned = await prisma.vehicle.findMany({ where: { sellerId: { in: sellerIds } }, select: { id: true } });
       const vehicleIds = owned.map((v) => v.id);
       const auctions = await prisma.auction.deleteMany({ where: { vehicleId: { in: vehicleIds } } });
       const vehicles = await prisma.vehicle.deleteMany({ where: { sellerId: { in: sellerIds } } });
+
+      const diagnostics = await prisma.aiDiagnostic.findMany({
+        where: { userId: { in: sellerIds } }, select: { id: true },
+      });
+      const diagnosticIds = diagnostics.map((d) => d.id);
+      const diagnosticMessages = await prisma.aiDiagnosticMessage.deleteMany({ where: { diagnosticId: { in: diagnosticIds } } });
+      const diagnosticRows = await prisma.aiDiagnostic.deleteMany({ where: { userId: { in: sellerIds } } });
+
+      const chats = await prisma.chat.findMany({
+        where: { OR: [{ buyerId: { in: sellerIds } }, { sellerId: { in: sellerIds } }] },
+        select: { id: true },
+      });
+      const chatIds = chats.map((c) => c.id);
+      const messages = await prisma.message.deleteMany({ where: { chatId: { in: chatIds } } });
+      const chatRows = await prisma.chat.deleteMany({ where: { id: { in: chatIds } } });
+
       const { count } = await prisma.user.deleteMany({ where: { email: { startsWith: 'smoke.' } } });
       await prisma.$disconnect();
       console.log(`Limpieza: ${auctions.count} subasta(s), ${vehicles.count} vehiculo(s), `
+        + `${chatRows.count} chat(s) con ${messages.count} mensaje(s), `
+        + `${diagnosticRows.count} diagnostico(s) con ${diagnosticMessages.count} mensaje(s), `
         + `${count} usuario(s) smoke.* eliminados.\n`);
   } catch (err) {
     console.log(`No se pudo limpiar (el servidor de la API puede seguir usando la DB): ${err.message}\n`);

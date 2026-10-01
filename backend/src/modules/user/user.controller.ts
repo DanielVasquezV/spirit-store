@@ -2,7 +2,7 @@ import type { Request, Response } from 'express';
 
 import { AppError, asyncHandler } from '../../middleware/error-handler.js';
 import { created, ok } from '../../lib/api-response.js';
-import { validatePassword } from '../../lib/validate.js';
+import { validatePassword, requireUuid } from '../../lib/validate.js';
 import * as userService from './user.service.js';
 
 export const getUsers = asyncHandler(async (_req: Request, res: Response) => {
@@ -10,7 +10,11 @@ export const getUsers = asyncHandler(async (_req: Request, res: Response) => {
 });
 
 export const getUserById = asyncHandler(async (req: Request, res: Response) => {
-  const user = await userService.getUserById(String(req.params.id));
+  // El id se valida antes de tocar la base: la columna es `uuid` y un string
+  // cualquiera hace fallar la consulta con un error de Postgres que, sin esto,
+  // sale como 500 INTERNAL_ERROR. El 400 lo devuelve el resto de los endpoints
+  // con un id en la ruta, y aca tiene que ser el mismo.
+  const user = await userService.getUserById(requireUuid(String(req.params.id)));
   if (!user) throw AppError.notFound('User');
   ok(res, user);
 });
@@ -22,9 +26,6 @@ export const createUser = asyncHandler(async (req: Request, res: Response) => {
     throw AppError.badRequest('Fields email, fullName and password are required');
   }
 
-  // validatePassword y no un `length < 8` propio: además del mínimo, chequea el
-  // tope de 72 bytes de bcrypt, más allá del cual trunca en silencio y dos
-  // contraseñas distintas dan el mismo hash.
   // validatePassword y no un `length < 8` propio: además del mínimo, chequea el
   // tope de 72 bytes de bcrypt, más allá del cual trunca en silencio y dos
   // contraseñas distintas dan el mismo hash.

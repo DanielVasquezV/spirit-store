@@ -74,8 +74,41 @@ function searchText(brand: string, model: string): string {
     .join(' ');
 }
 
-// Fotos de relleno determinísticas: el almacenamiento propio solo se exige al subir desde la app.
+// Foto real de cada modelo, tomada de Wikimedia Commons (la enciclopedia). Es la
+// imagen principal del articulo de Wikipedia de ese auto, asi que corresponde a la
+// marca/modelo (y generacion) del vehiculo. Se pide a 1200px via Special:FilePath,
+// que resuelve el thumbnail escalado del archivo original: no depende de un bucket
+// propio ni de anchos de thumbnail pre-generados.
+const WIKIMEDIA_PHOTOS: Record<string, string> = {
+  MR0FA3CD4P0000001: '2016_Toyota_HiLux_Invincible_D-4D_4WD_2.4_Front.jpg',
+  WBA5R1C50N0000002: '2019_BMW_318d_SE_Automatic_2.0_Front.jpg',
+  WP0AB2A99M0000003: '2025_Porsche_992_Carrera_convertible_DSC_7026.jpg',
+  '5YJ3E1EA7P0000004': 'Tesla_Model_3_%282023%29_Autofr%C3%BChling_Ulm_IMG_9282.jpg',
+  WVWZZZAUZN0000005: '2020_Volkswagen_Golf_Style_1.5_Front.jpg',
+  '1FMEE5DH0N0000006': 'Ford_Bronco_%286th_generation%29_Outer_Banks_1X7A0384.jpg',
+  W1NYC7HJ0M0000007: 'Mercedes-Benz_W463_G_350_BlueTEC_01.jpg',
+  '2HGFE1E52P0000008': '2022_Honda_Civic_Touring_in_Lunar_Silver_Metallic%2C_Front_Left%2C_05-10-2022.jpg',
+  '1FA6P8CF5M0000009': '2019_Ford_Mustang_GT_5.0_facelift.jpg',
+  MR2B29F30N0000011: '2020_Toyota_Yaris_Design_HEV_CVT_1.5_Front.jpg',
+  KMHCT41DAN0000012: '2019_Hyundai_Accent_1.6L%2C_front_10.8.19.jpg',
+  JTDKARFU0N0000013: 'Toyota_Prius_2.0_HEV_Limited_%28V%29_%E2%80%93_f_18112022.jpg',
+  '2T3P1RFV0P0000014': '2024_Toyota_RAV4_Prime_XSE_Premium_in_Silver_Sky_with_Midnight_Black_roof%2C_front_left.jpg',
+  KNDPM3AC0N0000015: '2025_Kia_Sportage_S_front_only.jpg',
+  '3N6CD33B0N0000016': '2021_Nissan_Frontier_Pro_4X_%28Colombia%3B_facelift%29_front_view_01.png',
+  MMBJYKL10N0000017: 'Mitsubishi_Triton_LC_2.4_GLS_2WD_Blade_Silver_Metallic_%28cropped%29.jpg',
+  LRWYGCEK0P0000018: '2021_BYD_Dolphin_EV_%28front%29.jpg',
+  '3MZBPABL0N0000019': 'Mazda3_SKYACTIV-G.jpg',
+  '1C4HJXDG0N0000020': 'Jeep_Wrangler_Unlimited_%28JL%29_PHEV_IMG_5808.jpg',
+};
+
+// Galeria del vehiculo: la portada es la foto fiel al modelo; si un VIN no tiene
+// foto curada, cae a un relleno deterministico (el almacenamiento propio solo se
+// exige al subir desde la app).
 function images(vin: string): { url: string; position: number }[] {
+  const file = WIKIMEDIA_PHOTOS[vin];
+  if (file) {
+    return [{ url: `https://commons.wikimedia.org/wiki/Special:FilePath/${file}?width=1200`, position: 0 }];
+  }
   return [0, 1, 2].map((position) => ({ url: `https://picsum.photos/seed/${vin}-${position}/1200/800`, position }));
 }
 
@@ -83,7 +116,7 @@ async function seedAdmin(): Promise<void> {
   const passwordHash = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD ?? 'change-me', SALT_ROUNDS);
   await prisma.user.upsert({
     where: { email: ADMIN_EMAIL },
-    update: {},
+    update: { passwordHash },
     create: { email: ADMIN_EMAIL, fullName: 'SpiritApex Admin', passwordHash, role: 'ADMIN' },
   });
 }
@@ -97,7 +130,7 @@ async function seedUsers(): Promise<Map<string, string>> {
       : {};
     const user = await prisma.user.upsert({
       where: { email: demo.email },
-      update: {},
+      update: { passwordHash },
       create: { email: demo.email, fullName: demo.fullName, phoneNumber: demo.phoneNumber, role: demo.role, passwordHash, ...dui },
     });
     ids.set(demo.email, user.id);
@@ -110,6 +143,12 @@ async function seedVehicles(users: Map<string, string>): Promise<Map<string, str
   for (const demo of DEMO_VEHICLES) {
     const existing = await prisma.vehicle.findUnique({ where: { vin: demo.vin }, select: { id: true } });
     if (existing) {
+      // El seed es idempotente, pero la galeria puede cambiar (p. ej. fotos curadas):
+      // se reemplazan las imagenes del vehiculo ya sembrado sin recrearlo.
+      await prisma.vehicleImage.deleteMany({ where: { vehicleId: existing.id } });
+      await prisma.vehicleImage.createMany({
+        data: images(demo.vin).map((image) => ({ ...image, vehicleId: existing.id })),
+      });
       ids.set(demo.vin, existing.id);
       continue;
     }

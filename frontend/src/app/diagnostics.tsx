@@ -45,7 +45,7 @@ export default function DiagnosticsScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScreenHeader title="Asistente IA" subtitle={subtitle} onBack={() => router.back()} />
+      <ScreenHeader title="Asistente APEX" subtitle={subtitle} onBack={() => router.back()} />
 
       <View style={[styles.flex, { paddingBottom: keyboardHeight }]}>
         <ScrollView

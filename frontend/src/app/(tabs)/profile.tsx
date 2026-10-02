@@ -93,7 +93,7 @@ export default function ProfileScreen() {
                 <Feather name="cpu" size={20} color={Colors.textInverse} />
               </View>
               <View style={styles.toolInfo}>
-                <Text style={styles.toolTitle}>Asistente IA</Text>
+                <Text style={styles.toolTitle}>Asistente APEX</Text>
                 <Text style={styles.toolSub}>Diagnosticá fallas o pedí recomendaciones de autos del catálogo</Text>
               </View>
             </View>
